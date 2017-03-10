@@ -1,0 +1,1421 @@
+Deep Learning
+
+Assignment 1
+The objective of this assignment is to learn about simple data curation practices, and familiarize you with some of the data we'll be reusing later. This notebook uses the notMNIST dataset to be used with python experiments. This dataset is designed to look like the classic MNIST dataset, while looking a little more like real data: it's a harder task, and the data is a lot less 'clean' than MNIST.
+In [18]:
+
+# These are all the modules we'll be using later. Make sure you can import them
+# before proceeding further.
+from __future__ import  print_function
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import sys
+import tarfile
+from IPython.display import display, Image
+from scipy import ndimage 
+from sklearn.linear_model import LogisticRegression
+from six.moves.urllib.request import urlretrieve
+from six.moves import cPickle as pickle
+​
+​
+# Config the matplotlib backend as plotting inline in IPython
+%matplotlib inline
+First, we'll download the dataset to our local machine. The data consists of characters rendered in a variety of fonts on a 28x28 image. The labels are limited to 'A' through 'J' (10 classes). The training set has about 500k and the testset 19000 labelled examples. Given these sizes, it should be possible to train models quickly on any machine.
+In [19]:
+
+url = 'http://commondatastorage.googleapis.com/books1000/'
+last_percent_reported = None
+data_root = '.' # Change me to store data elsewhere
+​
+def download_progress_hook(count, blockSize, totalSize):
+  """A hook to report the progress of a download. This is mostly intended for users with
+  slow internet connections. Reports every 5% change in download progress.
+  """
+  global last_percent_reported
+  percent = int(count * blockSize * 100 / totalSize)
+​
+  if last_percent_reported != percent:
+    if percent % 5 == 0:
+      sys.stdout.write("%s%%" % percent)
+      sys.stdout.flush()
+    else:
+      sys.stdout.write(".")
+      sys.stdout.flush()
+      
+    last_percent_reported = percent
+        
+def maybe_download(filename, expected_bytes, force=False):
+  """Download a file if not present, and make sure it's the right size."""
+  dest_filename = os.path.join(data_root, filename)
+  if force or not os.path.exists(dest_filename):
+    print('Attempting to download:', filename) 
+    filename, _ = urlretrieve(url + filename, dest_filename, reporthook=download_progress_hook)
+    print('\nDownload Complete!')
+  statinfo = os.stat(dest_filename)
+  if statinfo.st_size == expected_bytes:
+    print('Found and verified', dest_filename)
+  else:
+    raise Exception(
+      'Failed to verify ' + dest_filename + '. Can you get to it with a browser?')
+  return dest_filename
+​
+train_filename = maybe_download('notMNIST_large.tar.gz', 247336696)
+test_filename = maybe_download('notMNIST_small.tar.gz', 8458043)
+Found and verified ./notMNIST_large.tar.gz
+Found and verified ./notMNIST_small.tar.gz
+In [20]:
+
+num_classes = 10
+np.random.seed(133)
+​
+def maybe_extract(filename, force=False):
+  root = os.path.splitext(os.path.splitext(filename)[0])[0]  # remove .tar.gz
+  if os.path.isdir(root) and not force:
+    # You may override by setting force=True.
+    print('%s already present - Skipping extraction of %s.' % (root, filename))
+  else:
+    print('Extracting data for %s. This may take a while. Please wait.' % root)
+    tar = tarfile.open(filename)
+    sys.stdout.flush()
+    tar.extractall(data_root)
+    tar.close()
+  data_folders = [
+    os.path.join(root, d) for d in sorted(os.listdir(root))
+    if os.path.isdir(os.path.join(root, d))]
+  if len(data_folders) != num_classes:
+    raise Exception(
+      'Expected %d folders, one per class. Found %d instead.' % (
+        num_classes, len(data_folders)))
+  print(data_folders)
+  return data_folders
+  
+train_folders = maybe_extract(train_filename)
+test_folders = maybe_extract(test_filename)
+./notMNIST_large already present - Skipping extraction of ./notMNIST_large.tar.gz.
+['./notMNIST_large/A', './notMNIST_large/B', './notMNIST_large/C', './notMNIST_large/D', './notMNIST_large/E', './notMNIST_large/F', './notMNIST_large/G', './notMNIST_large/H', './notMNIST_large/I', './notMNIST_large/J']
+./notMNIST_small already present - Skipping extraction of ./notMNIST_small.tar.gz.
+['./notMNIST_small/A', './notMNIST_small/B', './notMNIST_small/C', './notMNIST_small/D', './notMNIST_small/E', './notMNIST_small/F', './notMNIST_small/G', './notMNIST_small/H', './notMNIST_small/I', './notMNIST_small/J']
+Problem 1
+Let's take a peek at some of the data to make sure it looks sensible. Each exemplar should be an image of a character A through J rendered in a different font. Display a sample of the images that we just downloaded. Hint: you can use the package IPython.display.
+Now let's load the data in a more manageable format. Since, depending on your computer setup you might not be able to fit it all in memory, we'll load each class into a separate dataset, store them on disk and curate them independently. Later we'll merge them into a single dataset of manageable size. We'll convert the entire dataset into a 3D array (image index, x, y) of floating point values, normalized to have approximately zero mean and standard deviation ~0.5 to make training easier down the road. A few images might not be readable, we'll just skip them.
+In [21]:
+
+# We can display images using Image(filename = "")
+Image(filename="notMNIST_small/A/Q0NXaWxkV29yZHMtQm9sZEl0YWxpYy50dGY=.png")
+Out[21]:
+
+In [22]:
+
+# We get all file names
+fn = os.listdir("notMNIST_large/B/")
+fn
+Out[22]:
+['U2hvd2NhcmQgR290aGljLnR0Zg==.png',
+ 'cXVhdHJvIGRlYWQgbW9zcXVpdG8ncy50dGY=.png',
+ 'SkJyYWR5Lm90Zg==.png',
+ 'WmFwZiBFbGxpcHRpY2FsIDcxMS5wZmI=.png',
+ 'TXIgTGVvcG9sZGUudHRm.png',
+ 'Q2FzdWFsIFJlZ3VsYXIudHRm.png',
+ 'SWZsb3JpZGEtRGVtaUJvbGQub3Rm.png',
+ 'Sm91bHUgRm9udHRpIEZlbm90eXBlLnR0Zg==.png',
+ 'Q2FzcXVlIFJlZ3VsYXIudHRm.png',
+ 'U2FyaS1NZWRpdW1JdGFsaWMub3Rm.png',
+ 'Qm9kb25pQ29uZEMub3Rm.png',
+ 'T2x5bXBpYW4tQm9sZC5vdGY=.png',
+ 'YSBidWcncyBsaWZlLnR0Zg==.png',
+ 'VGlmZmFueS1EZW1pLm90Zg==.png',
+ 'RnV0dXJlIEV4LnR0Zg==.png',
+ 'c3lyaWFjLnR0Zg==.png',
+ 'R2VvIDExMiBFeHRlbmRlZCBOb3JtYWwudHRm.png',
+ 'QXVzdGVyZUxpZ2h0Q2Fwc1NTSy50dGY=.png',
+ 'U1VNTy5vdGY=.png',
+ 'UGFzYWRlbmEtUmVndWxhckl0YS5vdGY=.png',
+ 'SGVsdmV0aWNhTmV1ZUxULUNvbmRlbnNlZE9ibC5vdGY=.png',
+ 'RmxvcmFFRi1Cb2xkLm90Zg==.png',
+ 'R291ZHlTYW5zTFQtQmxhY2tJdGFsaWMub3Rm.png',
+ 'QVRSb3Rpc1NhbnNTZXJpZi5vdGY=.png',
+ 'SGFsbG93ZWVuIFJlZ3VsYXIudHRm.png',
+ 'SW5pdGlhbENhcHM0IE5vcm1hbC50dGY=.png',
+ 'Rm9vIEJhciBJbmxpbmUgTkYudHRm.png',
+ 'WmFwZkJvb2tJVENieUJULU1lZGl1bS5vdGY=.png',
+ 'U2ltaWFuVGV4dC1Hb3JpbGxhLnBmYg==.png',
+ 'TW9sZWN1bGFyLm90Zg==.png',
+ 'R3J1bmdlIEFjaGluZyBCb2xkLnR0Zg==.png',
+ 'S3JpemlhIFVvbW8udHRm.png',
+ 'TWluaVBpY3MgQm9yZGVybGluZUN1dG91dC50dGY=.png',
+ 'Q291cmllciBOb3cudHRm.png',
+ 'VFYgVGltZXMudHRm.png',
+ 'R29zc2lwLnR0Zg==.png',
+ 'VmVudHVyZVNoYWRvdy50dGY=.png',
+ 'RnV0dXJhRUYtRXh0cmFCb2xkU2hhZG93ZWQub3Rm.png',
+ 'Q29tcGFjdGFTdGQtSXRhbGljLm90Zg==.png',
+ 'SVRDIEdvdWR5IFNhbnMgQm9sZCBJdGFsaWMucGZi.png',
+ 'QmFjY3VzIEJldmVsIFJlZ3VsYXIudHRm.png',
+ 'TW9yZ2FuVHcyLm90Zg==.png',
+ 'UGVyc3BlY3RpdmUgU1NpIEJvbGQgSXRhbGljLnR0Zg==.png',
+ 'TWV0YUJvbGRDRUxGLUl0YWxpYy5vdGY=.png',
+ 'UGFsZXR0ZSBTU2kgQm9sZC50dGY=.png',
+ 'Q2FtcEdyYW5hZGFORi50dGY=.png',
+ 'RHVjIERlIEJlcnJ5IExULnR0Zg==.png',
+ 'Y29weSAwOF82Ni50dGY=.png',
+ 'Q29uY29yZGVOb3ZhRXhwZXJ0QlEtUmVndWxhci5vdGY=.png',
+ 'U291dmVuaXJNb25vRUYtTGlnaHRJdGFsaWMub3Rm.png',
+ 'T3pvbmUgTGF5ZXIudHRm.png',
+ 'RG9tQ2FzdWFsLVRoaW5IQy50dGY=.png',
+ 'UGxhbnRpbiBTZW1pYm9sZC5wZmI=.png',
+ 'Q2hhcmxvdHRlU2Fuc1N0ZC1Cb29rLm90Zg==.png',
+ 'UXVha2UgJiBTaGFrZSAzRC50dGY=.png',
+ 'S1IgQ2hyaXN0bWFzIDIwMDEudHRm.png',
+ 'YV9GdXR1cmFSb3VuZERlbWkudHRm.png',
+ 'U2xpbWJhY2hCb29rLm90Zg==.png',
+ 'TU9ueXgub3Rm.png',
+ 'UXVhc3RpYyBLYXBzIFRoaW4udHRm.png',
+ 'Q2FybWluYUJULUJsYWNrLm90Zg==.png',
+ 'Qmxvb2RXYXgudHRm.png',
+ 'YXNzaWduLnR0Zg==.png',
+ 'RmVuaWNlSVRDYnlCVC1VbHRyYS5vdGY=.png',
+ 'RW5nYWdlZCBCb2xkLnR0Zg==.png',
+ 'TWVyY2F0IERpc3BsYXkgU1NpLnR0Zg==.png',
+ 'QmFsemFub1N0ZC5vdGY=.png',
+ 'U3R5bWllQlQtTWVkaXVtLm90Zg==.png',
+ 'QWFwZXgudHRm.png',
+ 'WmluYyBCb29tZXJhbmcudHRm.png',
+ 'SXNpZ3Zhci1SZWd1bGFyLm90Zg==.png',
+ 'UmlwcGxlIENydW1iIFVsdHJhQ29uLnR0Zg==.png',
+ 'QmVtYm8tU2VtaWJvbGQub3Rm.png',
+ 'TmV4dXNTYW5zVEYtQm9sZC5vdGY=.png',
+ 'Um9jb2RleS50dGY=.png',
+ 'QmFpbGV5U2Fuc0lUQ1N0ZC1Cb29rSXRhbGljLm90Zg==.png',
+ 'U0EgSW5rc3BvdC50dGY=.png',
+ 'RGFnZ21hc2sgTm9ybWFsLnR0Zg==.png',
+ 'UGl6emFEdWRlIFN0YXJzLnR0Zg==.png',
+ 'S29tYmkudHRm.png',
+ 'R2xhc2dvdy1NZWRpdW0ub3Rm.png',
+ 'QmV0YVNhbnMtTm9ybWFsT2JsaXF1ZS5vdGY=.png',
+ 'QWJhZGlNVFN0ZC1Db25kZW5zZWQub3Rm.png',
+ 'TWFzc2V5IEl0YWxpYy50dGY=.png',
+ 'T2ZmaWNpbmFTYW5JVEMtQm9va09TLm90Zg==.png',
+ 'U2VuZWNhQlEtSXRhbGljLm90Zg==.png',
+ 'R2FyYW1vbmQgUmV0cm9zcGVjdGl2ZSBTU2kgSXRhbGljLnR0Zg==.png',
+ 'QmFydCBIZWF2eSBCb2xkSXRhbGljLnR0Zg==.png',
+ 'VEUtNzAwMi50dGY=.png',
+ 'Rmlvcm5lLnR0Zg==.png',
+ 'R2Vub2FJdGFsaWMgRXggQm9sZC50dGY=.png',
+ 'UGFsYXRpbm8gTGlub3R5cGUgSXRhbGljLnR0Zg==.png',
+ 'SGFycnlQbGFpbi5vdGY=.png',
+ 'QXJpb3N0by50dGY=.png',
+ 'R2VvbWV0cmljNDE1QlQtTGl0ZUl0YWxpY0Eub3Rm.png',
+ 'RmxvcmlkYS1CbGFja0l0YS5vdGY=.png',
+ 'T2xlJyBTY3JpcHQgTGlnaHQgU1NpIExpZ2h0LnR0Zg==.png',
+ 'Q0FMSVBFUi0yMjJMQy5vdGY=.png',
+ 'T2ZmaWNpbmEgU2VyaWYgSVRDIFRUIEJvb2tJdGEudHRm.png',
+ 'TmV3QXN0ZXJMVFN0ZC1Cb2xkLm90Zg==.png',
+ 'Q29ucXVpc3RhZG9ybWFuTkYudHRm.png',
+ 'RGlzY28gRGVjayBMYXNlciBJdGFsaWMudHRm.png',
+ 'TGVnYWN5U2VyaWZJVENTdGQtQm9sZEl0YWxpYy5vdGY=.png',
+ 'TGFyZCEudHRm.png',
+ 'WmlwcGxlICAgIEJvbGQudHRm.png',
+ 'U29mYWNocm9tZSBJdGFsaWMudHRm.png',
+ 'TU5ld3NHb3RoaWMtQm9sZENvbmRlbnNlZC5vdGY=.png',
+ 'R2VvIE5vcm1hbC50dGY=.png',
+ 'U291dmVuaXIgSXRhbGljLnR0Zg==.png',
+ 'Q2FybWluYUJULUJsYWNrSXRhbGljLm90Zg==.png',
+ 'TWVyY3VyeVRleHRHNC1TZW1pYm9sZFNDLm90Zg==.png',
+ 'VmlyZW9Gb250IEV4LnR0Zg==.png',
+ 'VG9yY2luZyBBd2F5LnR0Zg==.png',
+ 'UGFuYWNoZUlUQ1N0ZC1CbGFjay5vdGY=.png',
+ 'T2xkcmljaGl1bUlUQ1N0ZC1JdGFsLm90Zg==.png',
+ 'UDIyRkxMV1RlcnJhY290dGEtRXh0cmFzLm90Zg==.png',
+ 'RXJhc0VGLU1lZGl1bS5vdGY=.png',
+ 'TW90aGVybG9kZSBMb2FkZWQgQU9FLnR0Zg==.png',
+ 'QXJpYWxNVFN0ZC1Cb2xkSXRhbGljLm90Zg==.png',
+ 'R2FyYW1vbmRJVENDb25kZW5zZWRCUS1Cb2xkSXRhbGljLm90Zg==.png',
+ 'SmFtYm9ub1RGLU1lZGl1bS5vdGY=.png',
+ 'RnJ1dGlnZXIgTGlub3R5cGUgQm9sZC50dGY=.png',
+ 'RnJlaWdodFNhbnMgTWVkaXVtLnR0Zg==.png',
+ 'R2lsbFNhbnNCUS1MaWdodC5vdGY=.png',
+ 'R3JhbnRzSGFuZC50dGY=.png',
+ 'Q2hpbnR6eSBDUFUgU2hhZG93IChCUkspLnR0Zg==.png',
+ 'U2xhbnRlZEFudGlxdWVSb21hblN0ZC5vdGY=.png',
+ 'UHJpbnQgRXJyb3IudHRm.png',
+ 'VGllcG9sby1Cb2xkSXRhbGljLm90Zg==.png',
+ 'U0YgSW50ZXJtb3NhaWMudHRm.png',
+ 'TGlub3R5cGVaYXBmaW5vT3JuYW1lbnRzLm90Zg==.png',
+ 'THVnZ2FnZUxpZ2h0T2JsLm90Zg==.png',
+ 'UGxhbmV0IE4gQ29uZGVuc2VkLnR0Zg==.png',
+ 'V2hpdHRpZWRNZWRpdW1FLnR0Zg==.png',
+ 'QnVyYmFua0JpZ0NvbmRlbnNlZC1Cb2xkLm90Zg==.png',
+ 'RHV0Y2g4MDFCVC1Cb2xkSXRhbGljLm90Zg==.png',
+ 'Q2hlcnViaW0gSW5pdGlhbHMudHRm.png',
+ 'QmxhbWJvdCBQcm8gTGl0ZSBCb2xkLnR0Zg==.png',
+ 'Vm9ubmVzVFRCbGFja0NvbmQub3Rm.png',
+ 'a3JvZWdlciAwNl82NS50dGY=.png',
+ 'QmVya2VsZXkgT2xkc3R5bGUgQm9sZC50dGY=.png',
+ 'Um90aXNTZXJpZi1Cb2xkLm90Zg==.png',
+ 'Q2FydG9vbiBIb2xsb3cgV2lkZS50dGY=.png',
+ 'U2VpZ2ggRGlzcGxheSBTU2kgSXRhbGljLnR0Zg==.png',
+ 'QWRMaWIgVGgudHRm.png',
+ 'VHlwZSByaWdodCEudHRm.png',
+ 'WmFwZiBIdW1hbmlzdCA2MDEgVWx0cmEgQlQudHRm.png',
+ 'TW9uYUxpc2FSZWN1dEVGLm90Zg==.png',
+ 'R2xhemUgTm9ybWFsLnR0Zg==.png',
+ 'RkZGIEdhbGF4eSBFeHRyYSBCb2xkLnR0Zg==.png',
+ 'U2luYmFkIEJvbGRJdGFsaWMudHRm.png',
+ 'SG9ybGV5T2xkU3R5bGVNVC1MaWdodEl0YWxpYy5vdGY=.png',
+ 'VmVjdG9yYSBMSCA5NiBCbGFjayBJdGFsaWMucGZi.png',
+ 'TmV4dXNNaXhURi1Cb2xkSXRhbGljLm90Zg==.png',
+ 'R2VvbWV0cmljIDIzMSBCb2xkIEJULnR0Zg==.png',
+ 'Q29ycGlkLUhlYXZ5Lm90Zg==.png',
+ 'Y29kZXgudHRm.png',
+ 'QmVhY2hDb25kZW5zZWQgTm9ybWFsLnR0Zg==.png',
+ 'U3ByaW5ndGltZV9DYXBpdGFscy50dGY=.png',
+ 'TmVydm91cy50dGY=.png',
+ 'SGVsdmV0aWNhLU5hcnJvdy1PYmxpcXVlLm90Zg==.png',
+ 'UXVhcnRlcmJhY2tPdXRsaW5lLnR0Zg==.png',
+ 'TmFwb2xlb24gTGlnaHQudHRm.png',
+ 'UGVuU3RpdGNoaW5nIE5vcm1hbC50dGY=.png',
+ 'RHV0Y2ggNzY2IEl0YWxpYy5wZmI=.png',
+ 'QXNwYXN0aWMgLnR0Zg==.png',
+ 'QXJjdHVydXNJbmxpbmUub3Rm.png',
+ 'QmFuY29Gb250Lm90Zg==.png',
+ 'SmVzdXNMb3Zlc1lvdXJCcm90aGVyLm90Zg==.png',
+ 'QmVuZ3VpYXRDaGFyaXNtYS1Db250b3VyLm90Zg==.png',
+ 'R291ZHlTYW5zRXhwZXJ0QlEtTWVkaXVtLm90Zg==.png',
+ 'SXRhbGlhSVRDYnlCVC1NZWRpdW0ub3Rm.png',
+ 'Sm9yZGFuJ3MgVHJlZWJhcmsudHRm.png',
+ 'UVVBS0UudHRm.png',
+ 'TGlub0xldHRlci1CbGFjay5vdGY=.png',
+ 'QmFkQWNpZFx1MjEyMi50dGY=.png',
+ 'QmVybnN0ZWluLUxpZ2h0Lm90Zg==.png',
+ 'UENBbmRpbGFyZXR0LnR0Zg==.png',
+ 'U2NpZW5pZGUudHRm.png',
+ 'VGFybmlzaGVkIEhhbG8udHRm.png',
+ 'TWVyY3VyeVRleHRHNC1Sb21hbi5vdGY=.png',
+ 'QVRSb3Rpc1NlcmlmLUl0YWxpYy5vdGY=.png',
+ 'RmxvdHNhbSBDYXJuYWdlLnR0Zg==.png',
+ 'VGltZWxlc3NUTGlnLnR0Zg==.png',
+ 'QmVhY2ggSXRhbGljLnR0Zg==.png',
+ 'QmxvY2sgT3V0LnR0Zg==.png',
+ 'Vm9ndWUgSXRhbGljLnR0Zg==.png',
+ 'Q2VydGlmaWNhdGUgQm9sZC50dGY=.png',
+ 'Q29udGV4dCBSZXByaXNlIEV4cGFuZGVkIFNTaSBFeHBhbmRlZCBJdGFsaWMudHRm.png',
+ 'RGVjb1RlY2gudHRm.png',
+ 'Q2F2YWxlcm8gQlQgUm9tYW4udHRm.png',
+ 'S25vY2tvdXQtSFRGNzAtRnVsbFdlbHRlcnd0Lm90Zg==.png',
+ 'VmFuZ3VhcmRJSUlBT0UtQm9sZC5wZmI=.png',
+ 'WmFwZiBDaGFuY2VyeSBCb2xkIEJULnR0Zg==.png',
+ 'RkZHb3RoaWMtT25lT25lLm90Zg==.png',
+ 'TmljayBUdXJibyBCb2xkIEV4cGFuZGVkIEl0YWxpYy50dGY=.png',
+ 'SGV5IEtpZHMhLnR0Zg==.png',
+ 'TW9uc3RlcnMgQXR0YWNrIS50dGY=.png',
+ 'Q29weTA5NjYudHRm.png',
+ 'UWx1bXB5IC1CUkstLnR0Zg==.png',
+ 'QmxldyBCb2xkLnR0Zg==.png',
+ 'UnNjaGFzbGluZSBFeC50dGY=.png',
+ 'UGFsbVNwcmluZ3MgSXRhbGljLnR0Zg==.png',
+ 'SW1wcmVzc2VkIEJvbGQudHRm.png',
+ 'UmVsaXFTdGQtU2VtaWJvbGRBY3RpdmUub3Rm.png',
+ 'QW1lcmlnb0JULUJvbGRBLm90Zg==.png',
+ 'R290aGljIEZsb3VyaXNoLnR0Zg==.png',
+ 'R291ZHlIYW5kdG9vbGVkU3RkLm90Zg==.png',
+ 'Q2FsaXBlciBVbmljYXNlLnR0Zg==.png',
+ 'V2VuZHkgTFAgTWVkaXVtLnBmYg==.png',
+ 'UDIyIEdhcmFtb3VjaGUudHRm.png',
+ 'Um91Z2hCcnVzaC50dGY=.png',
+ 'QmF1TEYtUmVndWxhci50dGY=.png',
+ 'SHV4bGV5VmVydElDRy1Cb2xkLm90Zg==.png',
+ 'VlR5cGV3cml0ZXItUmVtaW5ndG9uUG9ydGFibGUub3Rm.png',
+ 'QmFyY2Vsb25hRUYtQm9vay5vdGY=.png',
+ 'QWJhY3VzIFRocmVlIFNTaS50dGY=.png',
+ 'Q29sbG9zQmxhY2sub3Rm.png',
+ 'VGhpbWJhIERpc3BsYXkgU1NpIEl0YWxpYy50dGY=.png',
+ 'U0YgSnVnZ2VybmF1dCBDb25kZW5zZWQudHRm.png',
+ 'QW1waXIgRGVjby50dGY=.png',
+ 'QW1wbGl0dWRlRXh0cmFDb21wLUxpZ2h0LnR0Zg==.png',
+ 'Q2hpbGRzUGxheS1BZ2VFaWdodC5vdGY=.png',
+ 'TWFya2V0aW5nIFNjcmlwdCBJbmxpbmUudHRm.png',
+ 'T1BUSUJlcmxpbmctQWdlbmN5Lm90Zg==.png',
+ 'U2VyaWZhLUxpZ2h0SXRhbGljLm90Zg==.png',
+ 'VGltZXMtUm9tYW5TQy5vdGY=.png',
+ 'Qm9kb25pT2xkRmFjZUV4cEJRLUJvbGRPc0Yub3Rm.png',
+ 'VXRvcGlhLVNlbWlib2xkSXRhbGljT3NGLm90Zg==.png',
+ 'QnJpb3NvUHJvLU1lZGl1bVN1Ymgub3Rm.png',
+ 'UGxlYXNhbnRseSBQbHVtcC50dGY=.png',
+ 'RWRkYUNhcHMub3Rm.png',
+ 'Tm90dGluZ2hhbS5vdGY=.png',
+ 'Q2FzYWJsYW5jYSBTRiBCb2xkLnR0Zg==.png',
+ 'R290aGljTm8xM0JULVJlZ3VsYXIub3Rm.png',
+ 'TXV0aWxhdGVkLVBsYWluQ2Fwcy5vdGY=.png',
+ 'UGlvbmVlcklUQ2J5QlQtUmVndWxhci5vdGY=.png',
+ 'U3VyZmJvYXJkSVRDU3RkLm90Zg==.png',
+ 'R2xlbnlzIERpc3BsYXkgU1NpIEl0YWxpYy50dGY=.png',
+ 'R290aGFtUm91bmRlZC1NZWRpdW1JdGFsaWMub3Rm.png',
+ 'UVRDcmFpZ2V0eXBlT3V0bGluZSBSZWd1bGFyLnR0Zg==.png',
+ 'RGFsZWsudHRm.png',
+ 'U3R5bWllRUYtQmxhY2sub3Rm.png',
+ 'TWFpbiBTdHJpa2UgRmlsbC50dGY=.png',
+ 'TmV1ZUhlbHZldGljYUNvbmRlbnNlZEJRLUxpZ2h0Lm90Zg==.png',
+ 'QmFsbFRhY2sudHRm.png',
+ 'U0YgQXRhcmlhbiBTeXN0ZW0gSXRhbGljLnR0Zg==.png',
+ 'RnJhbmtsaW5Hb3RoaWMtTWVkQ25kSXRhbC5vdGY=.png',
+ 'Qk4tR2lsbGlhbi50dGY=.png',
+ 'QWxleGlzIExvd2VyIENhc2UgQm9sZC50dGY=.png',
+ 'U2hhZG93ZWQgU2VyaWYudHRm.png',
+ 'TGV0dGVyIFN3ZWF0ZXIgT3BlbiBEaXNwbGF5IFNTaSBOb3JtYWwudHRm.png',
+ 'VGhlU2Fuc0V4dHJhQm9sZC1DYXBzSXRhbGljLm90Zg==.png',
+ 'UXVpY2tzYW5zQWNjdXJhdGVJQ0cub3Rm.png',
+ 'Q2dCZXJuaGFyZHRCZC50dGY=.png',
+ 'QmFja3NwYWNlclNxdWFyZSBSZWd1bGFyLnR0Zg==.png',
+ 'QUdCdWNoQ29uZGVuc2VkQlEtTGlnaHQub3Rm.png',
+ 'T251YXZhLnR0Zg==.png',
+ 'RnV0dXJhIElDRyBPYmxpcXVlLnR0Zg==.png',
+ 'QXdrd2FyZC5vdGY=.png',
+ 'R3JvdGVzcXVlTVQtQm9sZEV4dGVuZGVkLm90Zg==.png',
+ 'Um9sbGVyIFdvcmxkIEJUTiBXaWRlLnR0Zg==.png',
+ 'QmVybmhhcmQgTW9kZXJuIEl0YWxpYy5wZmI=.png',
+ 'R3JvdGVza2kgQm9sZC50dGY=.png',
+ 'U0YgUGFsZSBCb3R0b20gU2hhZGVkLnR0Zg==.png',
+ 'QmVhcnBhdyBCYXRzLnR0Zg==.png',
+ 'RW5kdXJvLnR0Zg==.png',
+ 'VG9kYXlTQi1NZWRpdW0ub3Rm.png',
+ 'R2FyYW1vbmRFeHBCUS1JdGFsaWNTd2FzaC5vdGY=.png',
+ 'TW9ua2V5Q2F1Z2h0U3RlYWxpbmcub3Rm.png',
+ 'UXVhZHJpZ2FCUS1SZWd1bGFyLm90Zg==.png',
+ 'U29ubmUudHRm.png',
+ 'SGlsbG9jayBCUksudHRm.png',
+ 'RnJhbmtsaW5Hb3RJdGNURUVEZW0udHRm.png',
+ 'Q1RNZXJjdXJpdXMtQmxhY2sub3Rm.png',
+ 'Uk1Cb3docnQudHRm.png',
+ 'THViYWxpbkJRLUJvbGQub3Rm.png',
+ 'SGVsdmV0aWNhTmV1ZUxULU1lZGl1bUNvbmRPYmwub3Rm.png',
+ 'RXhwZWwgQm9sZC50dGY=.png',
+ 'VGhlU2Fuc0V4dHJhTGlnaHQtQ2Fwc0l0YWxpYy5vdGY=.png',
+ 'UGFtZWxhLnR0Zg==.png',
+ 'QXJydXMgQlQgQm9sZC50dGY=.png',
+ 'TmVvbiBTY3JpcHQudHRm.png',
+ 'T3JhbmRhIEJvbGQgQlQudHRm.png',
+ 'Q2FzbG9uWkwub3Rm.png',
+ 'V29yY2hlc3RlckVGLURlbWlCb2xkLm90Zg==.png',
+ 'QXJteSBUaGluLnR0Zg==.png',
+ 'UGhlZGVyRnJhY2tTaGFkb3dlZC50dGY=.png',
+ 'Vml2YVN0ZC1MaWdodEV4dHJhRXh0ZW5kZWQub3Rm.png',
+ 'SGFybG93RUYtU29saWQub3Rm.png',
+ 'VW5pdmVyc2l0eSBCb2xkIEl0YWxpYy50dGY=.png',
+ 'SVRDIEJlbmd1aWF0IEJvb2sgSXRhbGljLnBmYg==.png',
+ 'Q0sgTmVhdCBQcmludC50dGY=.png',
+ 'QXZhbnRHYXJkZVhMaWdodC5vdGY=.png',
+ 'U2FrYWJlUGVvcGxlMDMudHRm.png',
+ 'QXV0bzMtQmxhY2sudHRm.png',
+ 'VmlwZXIgU3F1YWRyb24gSXRhbGljLnR0Zg==.png',
+ 'U2VyaWYgUmVndWxhci50dGY=.png',
+ 'RW5ncmF2ZXJzT2xkRW5nbGlzaE1UU3RkLm90Zg==.png',
+ 'QW1lcmljYW5hRm9udC5vdGY=.png',
+ 'QXJpYWxNVFN0ZC1Db25kLm90Zg==.png',
+ 'THViYWxpbkdyYXBoLUJvb2sub3Rm.png',
+ 'QmxlZWQudHRm.png',
+ 'U2hlbW9raG1lZHktSVRWLnR0Zg==.png',
+ 'QmFzZU1vbm9OYXJyb3dCb2xkIEJvbGQudHRm.png',
+ 'UHlyaXRlLm90Zg==.png',
+ 'U2Nob29sYm9vayBCb2xkIEl0YWxpYy50dGY=.png',
+ 'Q2FsaWZvcm5pYW4gRkIgQm9sZC50dGY=.png',
+ 'UXVlbnRpbkVGLm90Zg==.png',
+ 'Sm91cm5hbFVsdHJhT2xkc3R5bGUub3Rm.png',
+ 'QWlkYW4gVGhpbiBCb2xkLnR0Zg==.png',
+ 'RW1tYXNjcmlwdE1WQlN0ZC5vdGY=.png',
+ 'Q2VudHVyeUV4cGQgQlQgSXRhbGljLnR0Zg==.png',
+ 'SVRDIEx1YmFsaW4gR3JhcGggRXh0cmEgTGlnaHQucGZi.png',
+ 'QW1lcmljYW4gU2NyaWJlLnR0Zg==.png',
+ 'MjIyIDAzLnR0Zg==.png',
+ 'T2F0bWVhbENvbmRlbnNlZC50dGY=.png',
+ 'UHJvdmlkZW5jZS1Cb2xkLm90Zg==.png',
+ 'VHJpbml0ZU5vMi1Sb21hbldpZGVUYWIub3Rm.png',
+ 'UGVyZWdyb3lKRi50dGY=.png',
+ 'VmlueWwgcmVwYWlyIGtpdC50dGY=.png',
+ 'S2luZXNpc1N0ZC1Cb2xkSXRhbGljLm90Zg==.png',
+ 'RXJpZUJsYWNrLnR0Zg==.png',
+ 'UHJldG9yaWEtTm9ybWFsLm90Zg==.png',
+ 'U3ltYm9sRUYtQm9sZC5vdGY=.png',
+ 'SWd1YW5hTG92ZXIgQlROIEx0LnR0Zg==.png',
+ 'QW1waGlvbiBSZWd1bGFyLnR0Zg==.png',
+ 'Q2FyYXdheS50dGY=.png',
+ 'Q2VudHVyeUlUQ2J5QlQtVWx0cmEub3Rm.png',
+ 'QW5uYSBTQyBJVEMgVFQudHRm.png',
+ 'RHVuZGFsa19IYW5kRHJhd24udHRm.png',
+ 'TGlkb1NURkNvbmRDRS1Cb2xkLm90Zg==.png',
+ 'T2FrUGFya1ppZ2d5LnR0Zg==.png',
+ 'bWFya2VkIGZvb2wudHRm.png',
+ 'R3JhbmJ5RWxlcGhhbnRCUS5vdGY=.png',
+ 'RWxlcGhhbnQtTGlnaHQub3Rm.png',
+ 'QWxiZXJ0IFJlZ3VsYXIudHRm.png',
+ 'SVRDQXZhbnRHYXJkZVN0ZC1EZW1pQ25PYmwub3Rm.png',
+ 'U2lsdmVyYWRvQm9sZC50dGY=.png',
+ 'WWVhcmxpbmQgSXRhbGljLnR0Zg==.png',
+ 'SGVsdmV0aWNhTmV1ZUxUU3RkLUJsay5vdGY=.png',
+ 'T25hbmkub3Rm.png',
+ 'QnVsbWVyIE1UIFNlbWlCb2xkIFNDLnR0Zg==.png',
+ 'UG9tcGVqaUl0YWxpYy5vdGY=.png',
+ 'S2lzIEJUIEl0YWxpYy50dGY=.png',
+ 'Q2FzbG9uQm9va0JFLVJlZ3VsYXJTQy5vdGY=.png',
+ 'SSBBbS50dGY=.png',
+ 'SXBzd2ljaCBJdGFsaWMudHRm.png',
+ 'U3ludGF4IExULnR0Zg==.png',
+ 'RGEgQm9tYi50dGY=.png',
+ 'UnVuZGlnUGVuY2lsIE5vcm1hbC50dGY=.png',
+ 'QmUub3Rm.png',
+ 'R3Jhbmpvbi1TQy5vdGY=.png',
+ 'RFRMRmxlaXNjaG1hbm4tU1RSZWd1bGFyLm90Zg==.png',
+ 'Q0sgQmFsbG9vbnMudHRm.png',
+ 'S296R29TdGQtQm9sZC5vdGY=.png',
+ 'RnV0dXJhQ25kT2JsLUJvLnR0Zg==.png',
+ 'QnVsbWVyIE1UIERpc3BsYXkgQm9sZEl0YWxpYy50dGY=.png',
+ 'SXRpbWVzLUJvbGQub3Rm.png',
+ 'SGVsdmV0aWNhT2JsLUhlLnR0Zg==.png',
+ 'TGlzdGUgV2lkZSBCb2xkSXRhbGljLnR0Zg==.png',
+ 'RmFnb0NvTGYtTWVkaXVtSXRhbGljQ2Fwcy5vdGY=.png',
+ 'TWlzY2UgRGlzcGxheSBTU2kgSXRhbGljLnR0Zg==.png',
+ 'Q2FuYWl0aEhDLnR0Zg==.png',
+ 'RWRQUy1Hb3RoaWMucGZi.png',
+ 'dW1vcE1lZGl1bS50dGY=.png',
+ 'VHJhamFucy1DYXBzLUV4dGVuZGVkIE5vcm1hbC50dGY=.png',
+ 'Q2l0eUJRLU1lZGl1bS5vdGY=.png',
+ 'THlkaWFuLnBmYg==.png',
+ 'R2FyZGVud2F5RXh0LU5vLnR0Zg==.png',
+ 'RWxlY3RyYUxUU3RkLURpc3BsYXkub3Rm.png',
+ 'U3RvbmVTZXJJVENTdGQtTWVkaXVtSXRhbGljLm90Zg==.png',
+ 'QW1lcmljYW5hIERyZWFtcyBCb2xkLnR0Zg==.png',
+ 'RHViaXVzLU5vcm1hbC5vdGY=.png',
+ 'U2FsdmF0aW9uLnR0Zg==.png',
+ 'SG9lZmxlclRleHQtQm9sZC1JdGFsaWMtU3dhc2gub3Rm.png',
+ 'Q2hhcmxvdHRlIFNtYWxsIENhcHMgUGxhaW4udHRm.png',
+ 'TGlnaHRzT3V0LnR0Zg==.png',
+ 'SmVybmFCb2xkIEJvbGQudHRm.png',
+ 'UGxhbnRpbiBNVCBTZW1pIEJvbGQudHRm.png',
+ 'VGlyZXNpYXMgSW5mb2ZvbnQgWi50dGY=.png',
+ 'VW5pdmVyc2l0eVJvbWFuQlQtUmVndWxhci5vdGY=.png',
+ 'Rm9ybWF0IFBpIFR3byBTU2kudHRm.png',
+ 'a3JvZWdlciAwNF81Ni50dGY=.png',
+ 'Q2FmZWNvY28gQmxhY2tJdGFsaWMudHRm.png',
+ 'R2FyZW1vbmQtUmVndWxhci5vdGY=.png',
+ 'R2VudGl1bUFsdC50dGY=.png',
+ 'WmluZVNsYWJEaXMtQm9sZFJvbWFuRXhwLm90Zg==.png',
+ 'RWluIFNjaHdlaW4udHRm.png',
+ 'U3RvbmVJbmZvckVGLUJvbGRJdGFsaWMub3Rm.png',
+ 'VHJhZGVHb3RoaWNMVFN0ZC1MaWdodE9ibC5vdGY=.png',
+ 'VGhhaXRyYWRlLm90Zg==.png',
+ 'THlkaWFzSGFuZCBSZWd1bGFyLnR0Zg==.png',
+ 'TmFwb2xlb25lU2xhYklUQ1N0ZC1CbGFja0l0Lm90Zg==.png',
+ 'U2F0dXJkYXkgTW9ybmluZyBUb2FzdCBOZi50dGY=.png',
+ 'U0YgVG9vbnRpbWUgQmxvdGNoLnR0Zg==.png',
+ 'SXNhbHpidXJnLVhsaWdodC5vdGY=.png',
+ 'TXJSYWZraW4udHRm.png',
+ 'RWlnaHR5IFBlcmNlbnQudHRm.png',
+ 'WmFwZkVsbGlwdCBCVCBSb21hbi50dGY=.png',
+ 'V2FsYmF1bVN0YW5kYXJkRXhwZXJ0QlEtUmVndWxhck9zRi5vdGY=.png',
+ 'S2V2bHIgU3VpdC50dGY=.png',
+ 'RW50cmV6IFJlZ3VsYXIudHRm.png',
+ 'Qm9kb25pIFJlY3V0IFNTaSBCb2xkIEl0YWxpYy50dGY=.png',
+ 'UXVpY2tRdWljayBTaGFkb3cgSXRhbENvbmRlbnNlZC50dGY=.png',
+ 'UHJlc3RpZ2UxMiBCVCBCb2xkIEl0YWxpYy50dGY=.png',
+ 'TEhGIFNtYWx0cyBSZWd1bGFyLnR0Zg==.png',
+ 'RGlnaXQudHRm.png',
+ 'SmFnZ2VkIEJSSy50dGY=.png',
+ 'UmVjZWlwdCBEZW1vLnR0Zg==.png',
+ 'SWxsdXNpb25fLVx4ZGUudHRm.png',
+ 'U3Rhcm1hbi5vdGY=.png',
+ 'RW5ub2JsZWQgUGV0LnR0Zg==.png',
+ 'WGVuaWFDYW1lb0Mub3Rm.png',
+ 'RXhpdC1NZWRpdW0ub3Rm.png',
+ 'TEhGIEZhc3QgQ2FwcyBJdGFsaWMudHRm.png',
+ 'SGFsbGFuZGFsZSBIZWF2eSBKTC50dGY=.png',
+ 'RkZHb3RoaWMtVHdvT25lLm90Zg==.png',
+ 'V2lsZFdlc3QtTm9ybWFsLnR0Zg==.png',
+ 'TWluc3RlciBObyAyLnR0Zg==.png',
+ 'U2lsa3NjcmVlbiBFeHBhbmRlZCBCb2xkLnR0Zg==.png',
+ 'U2FtdXJhaWhlYi50dGY=.png',
+ 'VFRSaGVvc3RhdEZhaHJlbmhlaXQtQm9vay5vdGY=.png',
+ 'QXBvbGxvTVQtSXRhbGljT3NGLm90Zg==.png',
+ 'UXVpY2tHZWFyIFNoYWRvdy50dGY=.png',
+ 'SGFtYnVyZ2VyQ29uZGVuc2VkLnR0Zg==.png',
+ 'R3JhZmljei50dGY=.png',
+ 'U2Fzc29vbkluZmFudFN0ZC1Cb2xkLm90Zg==.png',
+ 'UmlmcmFmU2NyaXB0U1NLLnR0Zg==.png',
+ 'QnJhZXNpZGUgT3V0bGluZS50dGY=.png',
+ 'U2FucyBDb25kZW5zZWQgSVRBTElDLnR0Zg==.png',
+ 'SGVsdmV0aWNhTmV1ZUxULUhlYXZ5RXh0Lm90Zg==.png',
+ 'QmFyY29kaW5nLnR0Zg==.png',
+ 'REdfVW5icmEudHRm.png',
+ 'T2ggQ3J1ZCBCQi50dGY=.png',
+ 'RGlkb3QtSFRGLUwwNi1MaWdodC1JdGFsLm90Zg==.png',
+ 'QmVuZ3VhaXRDaGFyaXNtYVNoYWRlZC5vdGY=.png',
+ 'RmxhcmUgR290aGljIEJPTERJVEFMSUMudHRm.png',
+ 'VHJpbml0ZU5vMi1NZWRpdW1Db25kRXhwLm90Zg==.png',
+ 'SXNiZWxsSVRDU3RkLUJvb2tJdGFsaWMub3Rm.png',
+ 'VGltZXMgQm9sZCBJdGFsaWMucGZi.png',
+ 'VEwgU2VyaWYgQm9sZCBJdGFsaWMudHRm.png',
+ 'U0JDIEJhYnkgQmxvY2tzLnR0Zg==.png',
+ 'Q29tcGxpYW50IENvbmZ1c2UgMm8gQlJLLnR0Zg==.png',
+ 'Vk5JLUhMVGh1cGhhcC50dGY=.png',
+ 'TWluaW9uUHJvLU1lZGl1bUl0Lm90Zg==.png',
+ 'Sm9sdCBXaWRlIEJvbGQudHRm.png',
+ 'QXZlciBEaXNwbGF5IFNTaS50dGY=.png',
+ 'TGluZHNheUVGLm90Zg==.png',
+ 'V2hpcmxpZ2lnVHdvLnR0Zg==.png',
+ 'UGxhbmV0IE4gU2hhZG93LnR0Zg==.png',
+ 'TUpvYW5uYS5vdGY=.png',
+ 'QWR2ZXJ0aXNlcnNHb3RoaWMgSXRhbGljLnR0Zg==.png',
+ 'RnJhbmtsaW5Hb3RoaWNFRi1NZWRpQ29uZEl0YS5vdGY=.png',
+ 'R2FsbGlhcmQtQm9sZEl0YWxpYy5vdGY=.png',
+ 'RmxhdCBCcnVzaCBUaGluIEl0YWxpYy50dGY=.png',
+ 'Q2hlbW8tQnViYmxlU3Ryb2tlLm90Zg==.png',
+ 'Sm9obm55LUJvbGQudHRm.png',
+ 'R3Jvb3ZlIE1hY2hpbmUgRXhwVXByaWdodC50dGY=.png',
+ 'TWVuIG9mIFNjaWVuY2UgSXRhbGljLnR0Zg==.png',
+ 'UlNDYW5haXRoLnR0Zg==.png',
+ 'QXJnZW50Qm9iU3F1aXNoLnR0Zg==.png',
+ 'U0YgTW92aWUgUG9zdGVyIEJvbGQgT2JsaXF1ZS50dGY=.png',
+ 'TW9kZXJuTGlnaHRJdGFsaWMub3Rm.png',
+ 'VXNoZXJ3b29kTFQtQm9sZC5vdGY=.png',
+ 'Q2hvd01laW5OYXJyb3cgUmVndWxhci50dGY=.png',
+ 'RnJlZWhhbmQgNDcxLnBmYg==.png',
+ 'RnV6emVkLnR0Zg==.png',
+ 'UGFsYXRpbm9CUS1Cb2xkLm90Zg==.png',
+ 'TWlnaHR5IFplbyAyLjAgQm9sZC50dGY=.png',
+ 'Q0sgTGVhZnkgQ2FwaXRhbHMudHRm.png',
+ 'VGltZXNfSGFja2Vycy50dGY=.png',
+ 'TmVvVGVjaCBNZWRpdW0ub3Rm.png',
+ 'Q2dUb3dlckNkLnR0Zg==.png',
+ 'TmFybHlJbmxpbmUudHRm.png',
+ 'TWlyaWFtIFRyYW5zcGFyZW50LnR0Zg==.png',
+ 'U0YgTmV3IFJlcHVibGljIFNDIEl0YWxpYy50dGY=.png',
+ 'U2Fib25HcmVlay1Cb2xkLm90Zg==.png',
+ 'Q2FsdmVydE1UU3RkLm90Zg==.png',
+ 'Q2VudGVubmlhbC1CbGFja09zRi5vdGY=.png',
+ 'VGVrdG9uUHJvLUxpZ2h0Q29uZE9ibC5vdGY=.png',
+ 'WmFwZkludGVybmF0aW9uYWxCUS1EZW1pSXRhbGljLm90Zg==.png',
+ 'QW1lcmV0dG8gVGhpbiBCb2xkLnR0Zg==.png',
+ 'S2FsbG9zSVRDU3RkLU1lZGl1bUl0YWxpYy5vdGY=.png',
+ 'R2lsZ2FtZXNoU3RkLU1lZGl1bS5vdGY=.png',
+ 'TW9kdWxhUm91bmRTYW5zU21hbGxDYXBzIFJlZ3VsYXIudHRm.png',
+ 'QXJiaXRyYXJ5LnR0Zg==.png',
+ 'R3JvdmVTY3JpcHRCb2xkLnR0Zg==.png',
+ 'UlNIZWlkbGViZXJnLnR0Zg==.png',
+ 'TWVkaWNpIFRleHQudHRm.png',
+ 'UGFyYWJsZUxGLUJvbGRTQ0l0YWxpYy5vdGY=.png',
+ 'TG9tb1dlYlN0cmlwIExUIFN0ZCA3Lm90Zg==.png',
+ 'RXVyb1NhbnNFRi1Ud28ub3Rm.png',
+ 'QmxhbWJvdCBQcm8gTGl0ZS50dGY=.png',
+ 'SG91c2VIb2xpZGF5LVNhbnMub3Rm.png',
+ 'R3JleW1hbnRsZUV4dHJhcy5vdGY=.png',
+ 'QW1lcnkgV2lkZSBCb2xkLnR0Zg==.png',
+ 'Wm9uZSBSaWRlciBVbHRyYSBFeHBJdGFsaWMudHRm.png',
+ 'R290aGljIDMyIFdpZGUgTm9ybWFsLnR0Zg==.png',
+ 'TWF4LUV4dHJhQm9sZEl0YWxpYy5vdGY=.png',
+ 'QUlNZW51Lm90Zg==.png',
+ 'SGFsbyBDb25kZW5zZWQudHRm.png',
+ 'UFQgRnJlZVNldCBPYmxpcXVlIEN5cmlsbGljLnR0Zg==.png',
+ 'Q2xheXRvbnNIYW5kIFJlZ3VsYXIudHRm.png',
+ 'UXVhZWxHb3RoaWNJdGFsaWNzLnR0Zg==.png',
+ 'TW9kYWVybmUgUmVndWxhci50dGY=.png',
+ 'WXVjYXRhbiBJdGFsaWMudHRm.png',
+ 'QnVsbWVyLVN3YXNoLm90Zg==.png',
+ 'RnV0dXJhRUYtQm9vay5vdGY=.png',
+ 'Q2FzbG9uT3BlbmZhY2VCVC1SZWd1bGFyLm90Zg==.png',
+ 'Q2FtYnJpYS50dGM=.png',
+ 'TFRBdXRoZW50aWNTYW5zLUJvbGRJdGFsaWMub3Rm.png',
+ 'UEI5NlBTLUl0YWxpYy5wZmI=.png',
+ 'R2lsbFNhbnNCUS1VbHRyYUJvbGQub3Rm.png',
+ 'TWV4Y2VsbGVudC50dGY=.png',
+ 'Tm9mcmV0IFJlZ3VsYXIudHRm.png',
+ 'VGFjbyBCb3gudHRm.png',
+ 'TWl4ZWQgQmFnIDMudHRm.png',
+ 'RnJ1dGlnZXJOZXh0TFQtSGVhdnlJdGFsaWMub3Rm.png',
+ 'SW5kaWFuU3VtbWVyLm90Zg==.png',
+ 'RWxla3RyaWtGb250Lm90Zg==.png',
+ 'SGFyZHdvb2QudHRm.png',
+ 'RWxkb3JhZG9NaWNyby1JdGFsaWMub3Rm.png',
+ 'SVRDIEVyYXMgTGlnaHQucGZi.png',
+ 'UmFzZUdQTC1Cb2xkLnR0Zg==.png',
+ 'SW1tb3J0YWwudHRm.png',
+ 'WEVSWEVTLUVMRVZFTkFMVC5vdGY=.png',
+ 'TWFkaXNvbkNvbmRlbnNlZEJRLUxpZ2h0Lm90Zg==.png',
+ 'VEhXQUNLISEhMi50dGY=.png',
+ 'UmV2aXZlIE9WIEV4LnR0Zg==.png',
+ 'U25lYWtlcmhlYWQgQlROIFNoYWRvdyBPYmxpcXVlLnR0Zg==.png',
+ 'Q29uZ3Jlc3MtTWVkaXVtLm90Zg==.png',
+ 'V2hpcmxpZ2lnQmlnT25lLnR0Zg==.png',
+ 'Um91bmRzbGFiU2VyaWYudHRm.png',
+ 'VmVsam92aWMgSXRhbGljLnR0Zg==.png',
+ 'U2V2ZXIudHRm.png',
+ 'Q2dCYXJjbGF5T3V0bGluZS50dGY=.png',
+ 'R2lsbGllc0dvdFNoYUQudHRm.png',
+ 'QnJvdHRhcmRvbG1lLnR0Zg==.png',
+ 'VGFzc2UtUmVndWxhckNvbXAub3Rm.png',
+ 'S2VwbGVyU3RkLUxpZ2h0RXh0Q2FwdC5vdGY=.png',
+ 'RnJhbmtsaW5JVENCUS1Cb29rSXRhbGljLm90Zg==.png',
+ 'TW9ub3NwYWNlIDgyMSBHcmVlayBCVC50dGY=.png',
+ 'WmFwZkludGVybmF0bElUQ2J5QlQtSGVhdnkub3Rm.png',
+ 'WmlnLnR0Zg==.png',
+ 'TWVyY3VyeUJvbGRTbWFsbENhcHMub3Rm.png',
+ 'UGVyZm9ybWEgQm9vayBTU2kgU2VtaSBCb2xkLnR0Zg==.png',
+ 'SGFtYnVyZy1SZWd1bGFyLm90Zg==.png',
+ 'Q2xlYXJseVJvbWFuTGlnaHQgUmVndWxhci50dGY=.png',
+ 'UGxhbnRpbiBCb2xkLnR0Zg==.png',
+ 'RFRMRmxlaXNjaG1hbm5TVC1NZWRpdW1JdGFsaWMub3Rm.png',
+ 'QmFyYmVkIFNGLnR0Zg==.png',
+ 'Q2VsZXN0aWFsLnR0Zg==.png',
+ 'SG9ybGV5IE9sZCBTdHlsZSBNVC50dGY=.png',
+ 'Tmltcm9kTVQtQm9sZEl0YWxpYy5vdGY=.png',
+ 'UG95bnRlclRleHQtUm9tYW5Ud28ub3Rm.png',
+ 'Q2VudHVyeUV4cGFuZGVkQlQtQm9sZEl0YWxpYy5vdGY=.png',
+ 'THVjaWRhQ2FsbGlncmFwaHlFRi5vdGY=.png',
+ 'QmVlYiBNb2RlIFR3by50dGY=.png',
+ 'SGVsdmV0aWNhLUNvbmRlbnNlZC1CbGFjay5vdGY=.png',
+ 'QnJpb3NvUHJvLUxpZ2h0U3ViaC5vdGY=.png',
+ 'RmlsY28gT2xkZSBTdHlsZS50dGY=.png',
+ 'U0YgT2xkIFJlcHVibGljIFNDLnR0Zg==.png',
+ 'Q2hlYXBza2F0ZSBPdXRsaW5lLnR0Zg==.png',
+ 'SEpcdWFkNzVcdWM3NDBcdWMwZDhcdWJiM2MudHRm.png',
+ 'TXlyaWFkLUJvbGRJdGFsaWMub3Rm.png',
+ 'VGFuZ2VyaW5lIFhDbiBUaW0yLnR0Zg==.png',
+ 'TWlzdGVyRWFybEJULUJvbGQub3Rm.png',
+ 'SmVmZi1DaHJpcyBCb2xkLnR0Zg==.png',
+ 'SUQgU3VwZXJub3ZhU1cudHRm.png',
+ 'U2Fsb29uIFJlZ3VsYXIudHRm.png',
+ 'Q0sgVGllcy50dGY=.png',
+ 'U2F0YW5hcyBIdW1hbnVtIFNhbHZhdG9yLnR0Zg==.png',
+ 'R3J1bmdlLnR0Zg==.png',
+ 'VW5pZm9ybVVsdHJhQ29uZExpZ2h0Lm90Zg==.png',
+ 'QWxleGlzIExvd2VyIENhc2UgT3V0bGluZS50dGY=.png',
+ 'R2FyYW1vbmQtQm9va0l0YWxpYy5vdGY=.png',
+ 'RnJhbmtsaW5Hb3RoaWNFRi1Cb29rLm90Zg==.png',
+ 'U3Rvcm1TYW5zU3RkLUJvbGRJdGFsaWMub3Rm.png',
+ 'S2xpbmdvbkRhZ2dlci50dGY=.png',
+ 'U2VycGljby50dGY=.png',
+ 'VHcgQ2VuIE1UIEl0YWxpYy50dGY=.png',
+ 'Qm9kb25pU0NFRi1MaWdodC5vdGY=.png',
+ 'T21lbGxvbnMgTGlnaHQudHRm.png',
+ 'TW9kZXJuIEJvbGQudHRm.png',
+ 'RnJlZWhhbmQgNTIxLnBmYg==.png',
+ 'TGFuZ1x4ZjMgSXRhbGljLnR0Zg==.png',
+ 'VHdlYWtlZC5vdGY=.png',
+ 'WGVub3Ryb24gQnJvYWRzdHJva2UudHRm.png',
+ 'V2luZHNvciBPdXRsaW5lLnBmYg==.png',
+ 'U2ltaWFuRGlzcGxheS1Hb3JpbGxhQWx0LnBmYg==.png',
+ 'QWdmYVJvdGlzU2VtaXNhbnMtQm9sZC5vdGY=.png',
+ 'QW1lcmljYW5UeXBld3JpdGVyTFQtTWVkaXVtLm90Zg==.png',
+ 'UGhpbnN0ZXIgQm9sZCBJdGFsaWMudHRm.png',
+ 'Q29taWMgQm9vayBOb3JtYWwudHRm.png',
+ 'Q2F0Y2ggMjIudHRm.png',
+ 'REdfS2FiZWwgQm9sZC50dGY=.png',
+ 'VHJhY2twYWRTdGQub3Rm.png',
+ 'TXJzRWF2ZXNTbWFydExpZy1Cb2xkLnR0Zg==.png',
+ 'U0YgUGxhbmV0YXJ5IE9yYml0ZXIgQm9sZCBJdGFsaWMudHRm.png',
+ 'U2FiYmF0aEJsYWNrUmVndWxhci5vdGY=.png',
+ 'Q2hhbmV5IEl0YWxpYy50dGY=.png',
+ 'RnJlZWJvb3Rlci50dGY=.png',
+ 'U2FtU2Fucy1Cb2xkLm90Zg==.png',
+ 'Q29udGV4dCBTU2kgQm9sZC50dGY=.png',
+ 'RnJlZWZvcm0tRm91ci5vdGY=.png',
+ 'V3Vyc3RjaGVuU3BsYXR0ZWQudHRm.png',
+ 'RXJhc1VsdHJhLm90Zg==.png',
+ 'SGFsbGFuZGFsZSBTbWFsbCBDYXBzIEpMLnR0Zg==.png',
+ 'RnJpeiBCb2xkLnR0Zg==.png',
+ 'V2Fscm9kSW5pdGlhbHMub3Rm.png',
+ 'UG9wcGwgQ29sbGVnZSAoUikgMSBSZWd1bGFyLnR0Zg==.png',
+ 'TG9uZ3ZpZXcub3Rm.png',
+ 'RWxnZXRoeSBFc3QgVXBwZXIgT2JsaXF1ZS50dGY=.png',
+ 'RFMgVGlja2V0NjUudHRm.png',
+ 'THlkaWFuIENzdiBCVC50dGY=.png',
+ 'R2lsbFNhbnMub3Rm.png',
+ 'S25vY2tvdXQtSFRGOTEtVWx0bXRNaWRkbGV3dC5vdGY=.png',
+ 'S2FzdGVsbGFyLUJvbGQudHRm.png',
+ 'SmF2YSBLaWNrIEJUTiBDb25kIE9ibGlxdWUudHRm.png',
+ 'TWluaXN0ZXItTGlnaHRJdGFsaWMub3Rm.png',
+ 'U2VuYXRvclVsdHJhIFJlZ3VsYXIudHRm.png',
+ 'T3Jib25JVEMtUmVndWxhci5vdGY=.png',
+ 'RmFzc2UgSXRhbGljLnR0Zg==.png',
+ 'SVRDIFZlbGpvdmljIEJvb2sucGZi.png',
+ 'T2JsaXZpb3VzIGZvbnQudHRm.png',
+ 'TGVnYWN5U2Fuc0VGLU1lZGl1bUl0YWxpYy5vdGY=.png',
+ 'Q2hyeXNsZXItQ29uZGVuc2VkLm90Zg==.png',
+ 'V2lzdGVyaWFJVEMtUmVndWxhci5vdGY=.png',
+ 'T2ZmIEtpbHRlciBMIEJSSy50dGY=.png',
+ 'TWFzdGVydGV4dC1TeW1ib2xzT25lLm90Zg==.png',
+ 'UGVlckd5bnRJdGFsaWMub3Rm.png',
+ 'Q2xvdmVySVRDU3RkLm90Zg==.png',
+ 'Rm9saW8gTGlnaHQgQlQudHRm.png',
+ 'Q2luZW1hVGhpbi50dGY=.png',
+ 'RHV0Y2g4MDEgUm0gQlQgSXRhbGljLnR0Zg==.png',
+ 'QXJlbmEgQmxhY2sgRXh0ZW5kZWQudHRm.png',
+ 'VFdpc3RFRC50dGY=.png',
+ 'U2Nvb3Rlci5vdGY=.png',
+ 'VmxhZGltaXIgU2NyaXB0LnR0Zg==.png',
+ 'RnVqaSBUaGluIEJvbGQgSXRhbGljLnR0Zg==.png',
+ 'UmF0dGVyQml0Lm90Zg==.png',
+ 'RnJlZWRvbSA5IFRoaW4gSXRhbGljLnR0Zg==.png',
+ 'VGhlU2Fucy1COUJsYWNrSXRhbGljLm90Zg==.png',
+ 'RG91YmxlIFN0cmlrZS50dGY=.png',
+ 'SkNkdXgudHRm.png',
+ 'TXVsbGV0LnR0Zg==.png',
+ 'U2hhZy1NeXN0ZXJ5RnJhY3Rpb25zLnBmYg==.png',
+ 'Q2hlbHRlbmhhbUVGLUxpZ2h0Lm90Zg==.png',
+ 'SHVtYW5zdDUyMSBCVCBCb2xkIEl0YWxpYy50dGY=.png',
+ 'RW5naW5lLUJvbGRJdGFsaWNMRi5vdGY=.png',
+ 'Q292aW5ndG9uIFJldiBCb2xkIEl0YWxpYy50dGY=.png',
+ 'SmFtaWxsZUJvb2tJdGFsaWMub3Rm.png',
+ 'UlNDaGFybGllQ2hhbi50dGY=.png',
+ 'Vm9sdGFULnR0Zg==.png',
+ 'VHJpcGxleFNlcmlmLUxpZ2h0LnR0Zg==.png',
+ 'Q2dQaHlsbGlzSW5pdGlhbHMudHRm.png',
+ 'Um90aXNTZW1pU2Fuc1N0ZC1JdGFsaWMub3Rm.png',
+ 'UHJlc2VudC1Cb2xkLm90Zg==.png',
+ 'Q2FyZHMudHRm.png',
+ 'Q2hyaXN0aWFuYUJRLUl0YWxpYy5vdGY=.png',
+ 'VW5pdGVkU2Fuc1NlbWlDb25kLVRoaW4ub3Rm.png',
+ 'TWFzc2V5IFRoaW4gSXRhbGljLnR0Zg==.png',
+ 'Q29yaW50aGlhbkVGLU1lZGl1bS5vdGY=.png',
+ 'TXVsdGlmb3JtQ2Fwcy50dGY=.png',
+ 'U3VidXJiYW4tTGlnaHQudHRm.png',
+ 'S296TWluU3RkLUhlYXZ5Lm90Zg==.png',
+ 'TWFjcm8gQmxhY2sgU1NpIEJsYWNrIEl0YWxpYy50dGY=.png',
+ 'RGlkb3RMSC1Pcm5hbWVudHNPbmUub3Rm.png',
+ 'TWVnYVR5cGUub3Rm.png',
+ 'TXl0aG9sb2d5IEV4dGVuZGVkIEJvbGRJdGFsaWMudHRm.png',
+ 'Q2VudHVyeUJvbGQub3Rm.png',
+ 'U2F0dXJkYXlTYW5zSUNHLUJvbGQub3Rm.png',
+ 'Sm91cm5hbExpbmluZy1Cb2xkLnR0Zg==.png',
+ 'Q2hhcnRlckVGLVJlZ3VsYXJTQy5vdGY=.png',
+ 'T1RPIHRhbnBhLnR0Zg==.png',
+ 'SmFwYW4udHRm.png',
+ 'TWVudGEgRGlzcGxheSBTU2kgSXRhbGljLnR0Zg==.png',
+ 'R2xhc25vc3Qub3Rm.png',
+ 'U3R1dHRnYXJ0Lm90Zg==.png',
+ 'SHVtYW5pc3QgU2xhYnNlcmlmIDcxMiBCbGFjay5wZmI=.png',
+ 'VW5pc3BhY2UgQm9sZC50dGY=.png',
+ 'U3Bpbm4tUmVndWxhci5vdGY=.png',
+ 'TmV3cyA3MDIgQlQudHRm.png',
+ 'SmFjb2J5IElDRyBCbGFja0l0YWxpYy50dGY=.png',
+ 'QnJvY2FpbmUgRGVjYWRlLnR0Zg==.png',
+ 'QW1lcnkgVGhpbiBCb2xkLnR0Zg==.png',
+ 'RHluYW1vRHhjSXRhbGljQlhDLm90Zg==.png',
+ 'QUplbnNvblByby1Cb2xkRGlzcC5vdGY=.png',
+ 'QUdMZXR0ZXJpY2FDb25kZW5zZWQtUm9tYW4ub3Rm.png',
+ 'UmFuc29tTm90ZSBNZWRpdW0udHRm.png',
+ 'RGVhbm5hc0hhbmQgUmVndWxhci50dGY=.png',
+ 'Um9ja2V0IFByb3BlbGxlZC50dGY=.png',
+ 'VGltcGFuaSBJdGFsaWMudHRm.png',
+ 'VW5pdmVycy1FeHRyYUJsYWNrLm90Zg==.png',
+ 'VG9sZWRvLUxpZ2h0Lm90Zg==.png',
+ 'QXNpbW92LnR0Zg==.png',
+ 'U3RhZmZvcmQtRGVtaUJvbGRJdGEub3Rm.png',
+ 'U3BhY2UgQXR0YWNrLnR0Zg==.png',
+ 'UmVndWxhdG9yLU1lZGl1bUl0YWxpYy5vdGY=.png',
+ 'Q2FlY2lsaWEtTGlnaHRPc0Yub3Rm.png',
+ 'UGFsYXRpbm8tQm9sZEl0YWxpYyBXZC50dGY=.png',
+ 'S3VydmF0dXJlIEJSSy50dGY=.png',
+ 'U2hhdHRlcmRheSBJQ0cgRGljZS50dGY=.png',
+ 'RFRMRG9yaWFuVC5vdGY=.png',
+ 'TW94aWUudHRm.png',
+ 'TWV6elN0ZC1Cb2xkLm90Zg==.png',
+ 'QW1pbnRhTGlnaHQudHRm.png',
+ 'RmFnb0NvLUJsYWNrSXRhbGljQ2Fwcy5vdGY=.png',
+ 'VGVhcG90LnR0Zg==.png',
+ 'QXZlbmlyIExUIDY1IE1lZGl1bSBPYmxpcXVlLnR0Zg==.png',
+ 'RGlzbmV5IEhhdW50ZWQgTWFuc2lvbiAyIFJlZ3VsYXIudHRm.png',
+ 'U2NlbmVTdGQtQm9sZC5vdGY=.png',
+ 'SG9lZmxlclRleHQtQm9sZC1TbWFsbENhcHMub3Rm.png',
+ 'Q2VsdGljLUNvbmRlbnNlZCBCb2xkLnR0Zg==.png',
+ 'QmFza2VydmlsbGUgQm9sZCBJdGFsaWMucGZi.png',
+ 'SG9tZSBQbGFubmluZyAyLnBmYg==.png',
+ 'Q2hhbnRpbGx5LUxpZ2h0SXRhLm90Zg==.png',
+ 'Q3VldWUgQ2hlZXN5LnR0Zg==.png',
+ 'U2hvdGd1bkJULVJlZ3VsYXIub3Rm.png',
+ 'QWxvciBOYXJyb3cgV2lkZSBOb3JtYWwudHRm.png',
+ 'U0YgU2hhaSBGb250YWkgRXh0ZW5kZWQgT2JsaXF1ZS50dGY=.png',
+ 'UXVpY2tRdWljayBDb25kZW5zZWQudHRm.png',
+ 'R2Fzb2xpbmUgU2FucyBCVE4gTHQgT2JsaXF1ZS50dGY=.png',
+ 'UGVudW1icmFTYW5zU3RkLUJvbGQub3Rm.png',
+ 'UG9zdFNhbnMtTWVkaXVtLm90Zg==.png',
+ 'QmVhbVNoaXAudHRm.png',
+ 'RmFnb0V4TGYtTWVkaXVtLm90Zg==.png',
+ 'S2FuZGFsLU1lZGl1bS50dGY=.png',
+ 'TEhGIEFyZ2VudGluZSBTb2xpZC50dGY=.png',
+ 'Q2xlYXJmYWNlR290aGljQlEtUmVndWxhci5vdGY=.png',
+ 'Rm9ybWF0YSBMaWdodCBJdGFsaWMucGZi.png',
+ 'TmFzaHZpbGxlRUYtTWVkaXVtSXRhbGljLm90Zg==.png',
+ 'S1IgQ2hyaXN0bWFzIERpbmdzIDIwMDQgVGhyZWUudHRm.png',
+ 'UmF0aHNrZWxsYXIub3Rm.png',
+ 'UG91dHR1LnR0Zg==.png',
+ 'U291dGh3ZXN0ZXJuIEJvbGQgSXRhbGljLnR0Zg==.png',
+ 'Um9tdHlwZXdyaXRlci5vdGY=.png',
+ 'Q3VzaGluZ0VGLUJvbGQub3Rm.png',
+ 'RWdnQ3JlYW0udHRm.png',
+ 'QXVyaW9sLUJsYWNrSXRhbGljLm90Zg==.png',
+ 'S3JhbWVyIFJlZ3VsYXIudHRm.png',
+ 'R3JlYXQgQ2lyY3VzIENsZWFuLnR0Zg==.png',
+ 'U3Rvcm1TYW5zU3RkLUJvbGQub3Rm.png',
+ 'TWljaGFlbG1hcy50dGY=.png',
+ 'S2V1bGVTYW5zU2VyaWZFRi1SZWd1bGFyLm90Zg==.png',
+ 'S2VwbGVyU3RkLUxpZ2h0Q25JdFN1Ymgub3Rm.png',
+ 'T3JuaXRvbnMtSGVhdnkub3Rm.png',
+ 'UmVsYXlDb21wLUJsYWNrSXRhbGljLnR0Zg==.png',
+ 'Um9zZXdvb2QtRmlsbC5vdGY=.png',
+ 'WmluZVNlcmlmRGlzLUJvbGRSb21hbi5vdGY=.png',
+ 'Qm9ubmV2aWxsZS50dGY=.png',
+ 'TGlub3R5cGVVbml2ZXJzLUNvbmRNZWRpdW1JdGFsaWMub3Rm.png',
+ 'TU5ld3NQbGFudGluLUJvbGRJdGFsaWMub3Rm.png',
+ 'T3JnYXNtaWEtTmluZXR5T3V0SXRhbGljLm90Zg==.png',
+ 'QWR2ZXJ0aXNlcnMtQmxkLm90Zg==.png',
+ 'UG9tcGVpU3RkLUxpZ2h0Lm90Zg==.png',
+ 'S2F0aGxlZW4udHRm.png',
+ 'Qm9vcFNoYWRvdyBCb2xkIEl0YWxpYy50dGY=.png',
+ 'U2FtYXJrYW4gTm9ybWFsLnR0Zg==.png',
+ 'WnVyaWNoIEdyZWVrIEluY2xpbmVkIEJULnR0Zg==.png',
+ 'Q29uY29yZGVOb3ZhLU1lZGl1bVNDLm90Zg==.png',
+ 'UGFyZSBXaWRlIEJvbGRJdGFsaWMudHRm.png',
+ 'V2Fsa3dheSBCbGFjayBSZXZPYmxpcXVlLnR0Zg==.png',
+ 'TWluaVBpY3MtTGlsQW5jaWVudHMub3Rm.png',
+ 'R2x5cGhpY1Nlcmllcy5vdGY=.png',
+ 'S2VwbGVyU3RkLVNlbWlib2xkU2NuU3ViaC5vdGY=.png',
+ 'U2FsZW0gRXJnb3Rpc20udHRm.png',
+ 'TG9wcERpc3BsYXkudHRm.png',
+ 'WmVtZXN0cm9TdGQtQmsub3Rm.png',
+ 'QmVuZ3VpYXQgR290aGljIEJvb2sgSXRhbGljIEJULnR0Zg==.png',
+ 'UmFmaWthLnR0Zg==.png',
+ 'Rm9ybWFsU2NyaXB0NDIxQlQudHRm.png',
+ 'U3RpbmdlciBMaWdodC50dGY=.png',
+ 'R3Jvb3ZlIE1hY2hpbmUgRXhwYW5kZWQudHRm.png',
+ 'Qm9yem9pIFJlZ3VsYXIudHRm.png',
+ 'V2lsaGVsbUtsaW5nc3BvckdvdGlzY2gub3Rm.png',
+ 'UGxhc3RpYyBUb21hdG8udHRm.png',
+ 'WFBFRCBTaGFkb3cudHRm.png',
+ 'T2xkIFN0YXRlIEhvdXNlIFNBTVBMRS50dGY=.png',
+ 'UmVlZEZvbnQgSXRhbGljLnR0Zg==.png',
+ 'QXJpYWRuZUxUU3RkLVJvbWFuLm90Zg==.png',
+ 'TW92aWUgUG9zdGVyIENvbmRlbnNlZCBJdGFsaWMudHRm.png',
+ 'RWxtaHVyc3QtUmVndWxhci5vdGY=.png',
+ 'U0YgVGVsZWdyYXBoaWMudHRm.png',
+ 'TUJvZG9uaS1JdGFsaWMub3Rm.png',
+ 'VGVycHNpY2hvcmVcdTIxMjIudHRm.png',
+ 'RGVsdGEgSmFlZ2VyIExpZ2h0LnR0Zg==.png',
+ 'SkkgU3RpY2tlcmJ1c2ggQ2Fwcy50dGY=.png',
+ 'TWluaW9uUHJvLU1lZGl1bUNuSXREaXNwLm90Zg==.png',
+ 'UmVsYXktQm9sZEl0YWxpYy50dGY=.png',
+ 'UVRMZXR0ZXJHb3RoIFJlZ3VsYXIudHRm.png',
+ 'S2VsbXNjb3R0IFJlZ3VsYXIudHRm.png',
+ 'RnV0dXJleEJvYi50dGY=.png',
+ 'SW5keSAxNyBJdGFsaWMudHRm.png',
+ 'QmlibG9uSVRDU3RkLUl0YWxpYy5vdGY=.png',
+ 'SnVsaXVzIEIgVGh5c3Nlbi50dGY=.png',
+ 'dGVlbiBzcGlyaXQudHRm.png',
+ 'RHV0Y2g4MjMgQlQgSXRhbGljLnR0Zg==.png',
+ 'TmF0V2VzdC1MaWdodC5vdGY=.png',
+ 'QXZhbnRHYXJkZUlUQ2J5QlQtQm9sZENvbmRlbnNlZC5vdGY=.png',
+ 'UDIyQXJ0c0FuZENyYWZ0cy1UYWxsLm90Zg==.png',
+ 'QSBDaGFybWluZyBGb250IEV4cGFuZGVkLnR0Zg==.png',
+ 'U2llZ2ZyaWVkLm90Zg==.png',
+ 'UXVhZHJhbmcub3Rm.png',
+ 'RWNsZWN0aWNNZWRsZXlTVEYub3Rm.png',
+ 'Q2l0eSAoUikgQm9sZCBJdGFsaWMudHRm.png',
+ 'TmFybHlSZWd1bGFyLm90Zg==.png',
+ 'Q0xBVyAyIC1CUkstLnR0Zg==.png',
+ 'SGVsdmV0aWNhLUNvbmRlbnNlZC1CbGFja09ibC5vdGY=.png',
+ 'QWdlbmN5RkItUmVndWxhci5vdGY=.png',
+ 'UmFsZWlnaEVGLU1lZGl1bS5vdGY=.png',
+ 'VmVydWNhIEJsYWNrLnR0Zg==.png',
+ 'Um9kaW4tUmVndWxhci5vdGY=.png',
+ 'Q2xlYXJ2aWV3SHd5LTUtVy50dGY=.png',
+ 'QmxhZG9NVFN0ZC1JdGFsaWMub3Rm.png',
+ 'RWR3YXJkaWFuRUYtTWVkaXVtLm90Zg==.png',
+ 'NDIgRW1hbmNpcGF0ZWQudHRm.png',
+ 'U0YgSG9sbHl3b29kIEhpbGxzIEJvbGQudHRm.png',
+ 'SGVhZGxpbmUgVHdvIEhQTEhTLnR0Zg==.png',
+ 'Tm9uc3RvcCBpdGFsaWMudHRm.png',
+ 'RG93bmNvbWUudHRm.png',
+ 'Q29ycGlkLUJsYWNrLm90Zg==.png',
+ 'V2FybG9jay5vdGY=.png',
+ 'TWlnaHR5IFplbyAyLjAudHRm.png',
+ 'WmFwZiBDaGFuY2VyeSBTd2FzaCBMaWdodC50dGY=.png',
+ 'V3JpZ2h0IEJvbGQgSXRhbGljLnR0Zg==.png',
+ 'S2V5Ym9hcmQgQ29uZGVuc2VkQWx0IFNTaSBDb25kZW5zZWQgQWx0ZXJuYXRlLnR0Zg==.png',
+ 'QmFzc2V0dCBCb2xkLnR0Zg==.png',
+ 'S2FiZWwtSGVhdnkub3Rm.png',
+ 'R2FsbGlhcmRSb21hbi5vdGY=.png',
+ 'S2VwbGVyU3RkLVNjbkl0Q2FwdC5vdGY=.png',
+ 'QWt0dWVsbGUub3Rm.png',
+ 'S2VwbGVyU3RkLUJvbGRTY25JdFN1Ymgub3Rm.png',
+ 'RGVsaSBTdXByZW1lIElUQyBTdGQub3Rm.png',
+ 'Q2VudHVyeSA3MjUgQm9sZC5wZmI=.png',
+ 'SW5rQmxvdC50dGY=.png',
+ 'SVRDIEFtZXJpY2FuIFR5cGV3cml0ZXIgQ29uZGVuc2VkLnBmYg==.png',
+ 'R2hvdWwgSGVhZGxpbmUudHRm.png',
+ 'Q2hhcnRlckJULUJsYWNrLm90Zg==.png',
+ 'QzM5SHJQMzZEbFR0LnR0Zg==.png',
+ 'U3RvbmVTYW5zT1NJVEMtQm9sZEl0YWxpYy5vdGY=.png',
+ 'S2FwbGFuLnR0Zg==.png',
+ 'QnJlYWtlcnNTU0sudHRm.png',
+ 'SW93YW5PbGRTdHlsZU9TRkJULUJvbGQub3Rm.png',
+ 'R3JlbWxpbiBTb2xpZCBCb2xkLnR0Zg==.png',
+ 'Qm94IFRvcC50dGY=.png',
+ 'U3dpczcyMSBMdENuIEJUIExpZ2h0IEl0YWxpYy50dGY=.png',
+ 'QmxvdHRvb29Xb2JibHkudHRm.png',
+ 'UlNQYXJrSGF2ZW4udHRm.png',
+ 'Q29udGV4dCBVbHRyYSBDb25kZW5zZWQgU1NpIEJvbGQgVWx0cmEgQ29uZGVuc2VkLnR0Zg==.png',
+ 'WmFwZkludGVybmF0aW9uYWxCUS1NZWRpdW1JdGFsaWMub3Rm.png',
+ 'RXhvdGljMzUwQlQtTGlnaHQub3Rm.png',
+ 'TWVhZCBCb2xkLnR0Zg==.png',
+ 'U2NobmVpZGxlck1lZFRCbGEudHRm.png',
+ 'UGx1cmFub24gTm9ybWFsLnR0Zg==.png',
+ 'TmlhbWV5IFJlZ3VsYXIudHRm.png',
+ 'UG9pbnRpbGxlIElDRy50dGY=.png',
+ 'Q29ycG9yYXRlLU5vcm1hbC5vdGY=.png',
+ 'VGltZXMtQm9sZFNDLm90Zg==.png',
+ 'T2NlYW5TYW5zTVRTdGQtU2VtaUJvbGRDb25kLm90Zg==.png',
+ 'TGVnYWN5U2FuSVRDLUJvbGRJdGFsT1Mub3Rm.png',
+ 'VmVjdHJvaWQgQ29zbW8udHRm.png',
+ 'QmlnVG9wZS50dGY=.png',
+ 'VHJpeGllUGxhaW4udHRm.png',
+ 'QmFuZHdpZHRoIEJhbmRsZXNzIC1CUkstLnR0Zg==.png',
+ 'WnVyaWNoIENuIEJULnR0Zg==.png',
+ 'QXVyb3JhIENuIEJULnR0Zg==.png',
+ 'Q29tcGFjdGFCVC1MaWdodC5vdGY=.png',
+ 'QWxpc2FsU3RkLUJvbGQub3Rm.png',
+ 'U2xhbUJhbmcgVGhlYXRlciBORi50dGY=.png',
+ 'TmV3dG9uWEMub3Rm.png',
+ 'SnVkZ2VtZW50LUJsYWNrRW1ib3NzZWQub3Rm.png',
+ 'YV9MYW5jZXRDbU90bC50dGY=.png',
+ 'R2lsbFNhbnNNVFByby1Cb2xkSXRhbGljLm90Zg==.png',
+ 'TGliZXJ0eSBIb2xsb3cudHRm.png',
+ 'RWxlbWVudHJpYy50dGY=.png',
+ 'T1BUSUNhcmxpbmctTGlnaHQub3Rm.png',
+ 'QW1lcmV0dG8gTm9ybWFsLnR0Zg==.png',
+ 'VE0gUGFyYW1vdW50IE5vcm1hbC50dGY=.png',
+ 'ZmxhdGxpbmUudHRm.png',
+ 'SnVwaXRlci5vdGY=.png',
+ 'TWF4LUxpZ2h0Lm90Zg==.png',
+ 'WnVyaWNoIEJvbGQgSXRhbGljIFdpbjk1QlQoMSkudHRm.png',
+ 'Tm92YSBDb25kZW5zZWQgU1NpIENvbmRlbnNlZCBJdGFsaWMudHRm.png',
+ 'SW5zaWduaWEgTFQudHRm.png',
+ 'QW5nc3QtSGVhdnkub3Rm.png',
+ 'S2FsbG9zSVRDU3RkLUJvbGRJdGFsaWMub3Rm.png',
+ 'Q2F4dG9uIEJvbGQgQlQudHRm.png',
+ 'Um9kY2hlbmtvIEV4LnR0Zg==.png',
+ 'RGVhZHdvb2QtU2luZ2xld2lkZUhlYXZ5Lm90Zg==.png',
+ 'TmV3dGV4dCBJdGFsaWMudHRm.png',
+ 'VGltZXMgTlIgQ29uZGVuc2VkIEJvbGQudHRm.png',
+ 'U2F0cmljdC50dGY=.png',
+ 'RmFnb0V4LUJsYWNrSXRhbGljLm90Zg==.png',
+ 'QmxvY2tHb3RoaWNSUi1Cb2xkRXh0cmFDb25kLm90Zg==.png',
+ 'TGV0dGVyR290aGljVGV4dC1Sb21hbi50dGY=.png',
+ 'Qml0c0V4dGVuZGVkLnR0Zg==.png',
+ 'RmFpcmZpZWxkTFRTdGQtSGVhdnlJdGFsaWMub3Rm.png',
+ 'RkxXIFNjcmlwdC50dGY=.png',
+ 'RXJpYyBMaXRlIFRoaW4gSXRhbGljLnR0Zg==.png',
+ 'Z2F0ZWNyYXNoZXIgdGV4YW4udHRm.png',
+ 'SG93YXJkX0ZhdC1MaWdoLnR0Zg==.png',
+ 'U0tBTkRFTU8gUiBCYXIgQ29kZSBDMzkudHRm.png',
+ 'QnJhaW5sZXNzIFRob3VnaHRzIENvbXBhY3QudHRm.png',
+ 'SW50dWl0aW9uIFNTaSBCb2xkIEl0YWxpYy50dGY=.png',
+ 'VGl0dGkgTWlsZXRvLnR0Zg==.png',
+ 'WnVyaWNoQlQtSXRhbGljLm90Zg==.png',
+ 'S2VubmVkeSBNZWRpdW0ucGZi.png',
+ 'V2F2eU9ybmFtZW50YWwudHRm.png',
+ 'Qm9kb25pU2V2U3dhc2hJVEMtQm9va0l0YWxpYy5vdGY=.png',
+ 'UVREZXVjZSBSZWd1bGFyLnR0Zg==.png',
+ 'TW9udGVyZXkucGZi.png',
+ 'Wm9ycXVlLnR0Zg==.png',
+ 'U3BsaW50SG1rLnR0Zg==.png',
+ 'T21lZ2EgU2VudHJ5LnR0Zg==.png',
+ 'RnJpelF1YWRyYXRhLVRoaW4udHRm.png',
+ 'QXJ0YVN0ZC1Cb29rSXRhbGljLm90Zg==.png',
+ 'QWNpZGljLm90Zg==.png',
+ 'Q0hSMzIudHRm.png',
+ 'VW5pdGVUb2dldGhlcklDRy50dGY=.png',
+ 'TGF1cmllc0hhbmQgUmVndWxhci50dGY=.png',
+ 'R2xhc3NlciBJdGFsaWMgSXRhbGljLnR0Zg==.png',
+ 'T2ZmaWNpbmFTYW5zLUJvb2tJdGFsaWMub3Rm.png',
+ 'UGFzYWRlbmFFRi1SZWd1bGFySXRhbGljLm90Zg==.png',
+ 'T2R5c3NldXMudHRm.png',
+ 'QW5naWUtQmxhY2tPcGVuLm90Zg==.png',
+ 'VHdpZ0JvbGQub3Rm.png',
+ 'Q2xlYXJmYWNlQ29udG91ci5vdGY=.png',
+ 'RW52aWV3IENvbmRlbnNlZCBMaWdodCBCb2xkSXRhbGljLnR0Zg==.png',
+ 'TWF5YW5EaW5nYmF0cy5vdGY=.png',
+ 'UG9wcGxGcmFrdHVyQlEub3Rm.png',
+ 'UXVpcmtzIElDRy50dGY=.png',
+ 'SSBoYXRlIENvbWljIFNhbnMudHRm.png',
+ 'Q2hlc3N2aWV3LUxpZ2h0LnR0Zg==.png',
+ 'UmFiYml0IFJlZ3VsYXIudHRm.png',
+ 'VXB0aWdodCBJdGFsaWMudHRm.png',
+ 'Q2VyaWdvRUYtQm9sZC5vdGY=.png',
+ 'RmFpcmZpZWxkTFRTdGQtSGVhdnkub3Rm.png',
+ 'SHVja2xlIEJ1ZmYudHRm.png',
+ 'QW1lcmljYW5UZXh0QlQtUmVndWxhci5vdGY=.png',
+ 'YV9UZWNobmljc0JyayBEZW1pQm9sZC50dGY=.png',
+ 'RnJvc3RiaXR0ZW4gV2Fua2VyLnR0Zg==.png',
+ 'RG93biBUb3duIEF1dG8udHRm.png',
+ 'SGlqaW54IE5vcm1hbC50dGY=.png',
+ 'UmV2ZXJzaW9uIEJvbGQudHRm.png',
+ 'RGVMb3Vpc3ZpbGxlU21hbGxDYXBzLnR0Zg==.png',
+ 'Q0sgSW5reS50dGY=.png',
+ 'TWV6em8gQm9sZC50dGY=.png',
+ 'R0FOR1NUQS5vdGY=.png',
+ 'Q29ycGlkQ2Fwcy1IZWF2eS5vdGY=.png',
+ 'RGVhZHdvb2QtU2luZ2xld2lkZUxpZ2h0Lm90Zg==.png',
+ 'VHJpbml0ZU5vMi1NZWRpdW1XaWRlLm90Zg==.png',
+ 'UGxvdmVyTGlnaHQgUmVndWxhci50dGY=.png',
+ 'TUEgRmlzaHkudHRm.png',
+ 'WmFwZkRpbmdiYXRzSVRDYnlCVC1SZWd1bGFyLm90Zg==.png',
+ 'VWx0cmFTaGFkb3cgSXRhbGljLnR0Zg==.png',
+ 'QnJ1c2hTY3JpcHQgQlQudHRm.png',
+ 'U2VyaWZhQlQtVGhpbkl0YWxpYy5vdGY=.png',
+ 'UmFkaWF0ZWQgUGFuY2FrZS50dGY=.png',
+ 'R291ZHlTYW5zRXhwZXJ0QlEtQm9vay5vdGY=.png',
+ 'R2FyYW1vbmRMaWdodC5vdGY=.png',
+ 'QmFnYWQgQm9sZCBUcnlvdXQudHRm.png',
+ 'UVRQYWxhdGluZSBCb2xkLnR0Zg==.png',
+ 'QmVscGhlYmUudHRm.png',
+ 'Q2VudHVyeVNjaFRFRSBCb2xkLnR0Zg==.png',
+ 'S2VwbGVyU3RkLUJvbGRTY25TdWJoLm90Zg==.png',
+ 'VW5pdmVyc2FsIEphY2sgU2hhZG93IEl0YWxpYy50dGY=.png',
+ 'TmFybHlPdXRsaW5lLnR0Zg==.png',
+ 'RnV0dXJhIExpZ2h0IEJULnR0Zg==.png',
+ 'cmhpbm8gZGluby50dGY=.png',
+ 'WmVuaXRoIDIwMDAudHRm.png',
+ 'VGhlbG1hc0hhbmQgUmVndWxhci50dGY=.png',
+ 'UHJlc3RpZ2UgMTIgUGl0Y2ggSXRhbGljIEJULnR0Zg==.png',
+ 'T1NXQUxEYmxhY2sudHRm.png',
+ 'TWF4VEYtTGlnaHRJdGFsaWMub3Rm.png',
+ 'SGVhdGhlcnZpbGxlT2xkU3R5bGUudHRm.png',
+ 'U3R1ZGlvU2NyaXB0SVRDU3RkLm90Zg==.png',
+ 'UXVhTmF1dGljYWxlX0luaXRpYWxzX05vMi50dGY=.png',
+ 'S2VubmVkeVNDR0QtQm9vay5vdGY=.png',
+ 'VHJ1bXBldExpdGUtTm9ybWFsLnR0Zg==.png',
+ 'U3RlZWwtSm9uZXNJdGFsaWMub3Rm.png',
+ 'U3BlY3RydW1NVC5vdGY=.png',
+ 'UlNUZW1wdXMgQ24gQm9sZC50dGY=.png',
+ 'SGVsdmV0aWNhUm91bmRlZExUU3RkLUJsa08ub3Rm.png',
+ 'UGhvdG9uaWNhLnR0Zg==.png',
+ 'VW5pdmVyc0xUU3RkLUxpZ2h0Q25PYmwub3Rm.png',
+ 'QmVybmhhcmRNb2Rlcm5PU0ZCVC1Sb21hbi5vdGY=.png',
+ 'T0NSRi1Cb2xkLm90Zg==.png',
+ 'VHJhamFucy1DYXBzIE5vcm1hbC50dGY=.png',
+ 'Qmxpc3MgQ29uZGVuc2VkIEJvbGQudHRm.png',
+ 'SHVtYW5hU2Fuc0lUQ1N0ZC1Cb2xkLm90Zg==.png',
+ 'TWFya2VyRmVsdFRoaW4gUmVndWxhci50dGY=.png',
+ 'U0YgRm94Ym9ybyBTY3JpcHQgQm9sZCBJdGFsaWMudHRm.png',
+ 'SHVtYW5pc3QgNTIxIEJULnR0Zg==.png',
+ 'QmVsd2VCVC1MaWdodC5vdGY=.png',
+ 'QW1wbGl0dWRlQ29tcC1Cb29rLnR0Zg==.png',
+ 'RXJhcy1CbGFjay1TZW1pQm9sZC50dGY=.png',
+ 'TWVuZG96YVJvbWFuLUJvb2tJdGFsaWMub3Rm.png',
+ 'V3JvdWdodElyb24tTWFjZXMub3Rm.png',
+ ...]
+In [23]:
+
+#display first 20 images
+for file in fn[:20]:
+    path = 'notMNIST_large/B/'+file
+    display(Image(path))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+In [24]:
+
+image_size = 28  # Pixel width and height.
+pixel_depth = 255.0  # Number of levels per pixel.
+​
+def load_letter(folder, min_num_images):
+  """Load the data for a single letter label."""
+  image_files = os.listdir(folder)
+  dataset = np.ndarray(shape=(len(image_files), image_size, image_size), dtype=np.float32)
+  print(folder)
+  num_images = 0
+  for image in image_files:
+    image_file = os.path.join(folder, image)
+    try:
+      image_data = (ndimage.imread(image_file).astype(float) - pixel_depth / 2) / pixel_depth
+      if image_data.shape != (image_size, image_size):
+        raise Exception('Unexpected image shape: %s' % str(image_data.shape))
+      dataset[num_images, :, :] = image_data
+      num_images = num_images + 1
+    except IOError as e:
+      print('Could not read:', image_file, ':', e, '- it\'s ok, skipping.')
+    
+  dataset = dataset[0:num_images, :, :]
+  if num_images < min_num_images:
+    raise Exception('Many fewer images than expected: %d < %d' %
+                    (num_images, min_num_images))
+    
+  print('Full dataset tensor:', dataset.shape)
+  print('Mean:', np.mean(dataset))
+  print('Standard deviation:', np.std(dataset))
+  return dataset
+        
+def maybe_pickle(data_folders, min_num_images_per_class, force=False):
+  dataset_names = []
+  for folder in data_folders:
+    set_filename = folder + '.pickle'
+    dataset_names.append(set_filename)
+    if os.path.exists(set_filename) and not force:
+      # You may override by setting force=True.
+      print('%s already present - Skipping pickling.' % set_filename)
+    else:
+      print('Pickling %s.' % set_filename)
+      dataset = load_letter(folder, min_num_images_per_class)
+      try:
+        with open(set_filename, 'wb') as f:
+          pickle.dump(dataset, f, pickle.HIGHEST_PROTOCOL)
+      except Exception as e:
+        print('Unable to save data to', set_filename, ':', e)
+  
+  return dataset_names
+​
+train_datasets = maybe_pickle(train_folders, 45000)
+test_datasets = maybe_pickle(test_folders, 1800)
+./notMNIST_large/A.pickle already present - Skipping pickling.
+./notMNIST_large/B.pickle already present - Skipping pickling.
+./notMNIST_large/C.pickle already present - Skipping pickling.
+./notMNIST_large/D.pickle already present - Skipping pickling.
+./notMNIST_large/E.pickle already present - Skipping pickling.
+./notMNIST_large/F.pickle already present - Skipping pickling.
+./notMNIST_large/G.pickle already present - Skipping pickling.
+./notMNIST_large/H.pickle already present - Skipping pickling.
+./notMNIST_large/I.pickle already present - Skipping pickling.
+./notMNIST_large/J.pickle already present - Skipping pickling.
+./notMNIST_small/A.pickle already present - Skipping pickling.
+./notMNIST_small/B.pickle already present - Skipping pickling.
+./notMNIST_small/C.pickle already present - Skipping pickling.
+./notMNIST_small/D.pickle already present - Skipping pickling.
+./notMNIST_small/E.pickle already present - Skipping pickling.
+./notMNIST_small/F.pickle already present - Skipping pickling.
+./notMNIST_small/G.pickle already present - Skipping pickling.
+./notMNIST_small/H.pickle already present - Skipping pickling.
+./notMNIST_small/I.pickle already present - Skipping pickling.
+./notMNIST_small/J.pickle already present - Skipping pickling.
+Problem 2
+Let's verify that the data still looks good. Displaying a sample of the labels and images from the ndarray. Hint: you can use matplotlib.pyplot.
+In [25]:
+
+# Index 0 should be all As, 1 should be all Bs, etc.
+pickle_file = train_datasets[1]
+​
+# With  would automatically close the file after the nested blok of code
+with open(pickle_file, 'rb') as f:
+    
+    # Unpickle
+    letter_set = pickle.load(f)
+    
+    #Pick a random imgage index
+    sample_idx = np.random.randint(len(letter_set))
+    
+    #Extract a 2D slice
+    sample_image = letter_set[sample_idx, :, :]
+    plt.figure()
+    
+    #Display it
+    plt.imshow(sample_image)
+
+Problem 3
+Another check: we expect the data to be balanced across classes. Verify that. Merge and prune the training data as needed. Depending on your computer setup, you might not be able to fit it all in memory, and you can tune train_size as needed. The labels will be stored into a separate array of integers 0 through 9. Also create a validation dataset for hyperparameter tuning.
+In [69]:
+
+0
+def make_arrays(nb_rows, img_size):
+  if nb_rows:
+    dataset = np.ndarray((nb_rows, img_size, img_size), dtype=np.float32)
+    labels = np.ndarray(nb_rows, dtype=np.int32)
+  else:
+    dataset, labels = None, None
+  return dataset, labels
+​
+def merge_datasets(pickle_files, train_size, valid_size=0):
+  num_classes = len(pickle_files)
+  valid_dataset, valid_labels = make_arrays(valid_size, image_size)
+  train_dataset, train_labels = make_arrays(train_size, image_size)
+  vsize_per_class = valid_size // num_classes
+  tsize_per_class = train_size // num_classes
+    
+  start_v, start_t = 0, 0
+  end_v, end_t = vsize_per_class, tsize_per_class
+  end_l = vsize_per_class+tsize_per_class
+  for label, pickle_file in enumerate(pickle_files):       
+    try:
+      with open(pickle_file, 'rb') as f:
+        letter_set = pickle.load(f)
+        # let's shuffle the letters to have random validation and training set
+        np.random.shuffle(letter_set)
+        if valid_dataset is not None:
+          valid_letter = letter_set[:vsize_per_class, :, :]
+          valid_dataset[start_v:end_v, :, :] = valid_letter
+          valid_labels[start_v:end_v] = label
+          start_v += vsize_per_class
+          end_v += vsize_per_class
+                    
+        train_letter = letter_set[vsize_per_class:end_l, :, :]
+        train_dataset[start_t:end_t, :, :] = train_letter
+        train_labels[start_t:end_t] = label
+        start_t += tsize_per_class
+        end_t += tsize_per_class
+    except Exception as e:
+      print('Unable to process data from', pickle_file, ':', e)
+      raise
+    
+  return valid_dataset, valid_labels, train_dataset, train_labels
+            
+            
+train_size = 200000
+valid_size = 10000
+test_size = 10000
+​
+valid_dataset, valid_labels, train_dataset, train_labels = merge_datasets(train_datasets, train_size, valid_size)
+_, _, test_dataset, test_labels = merge_datasets(test_datasets, test_size)
+​
+print('Training:', train_dataset.shape, train_labels.shape)
+print('Validation:', valid_dataset.shape, valid_labels.shape)
+print('Testing:', test_dataset.shape, test_labels.shape)
+Training: (200000, 28, 28) (200000,)
+Validation: (10000, 28, 28) (10000,)
+Testing: (10000, 28, 28) (10000,)
+Problem 4
+Convince yourself that the data is still good after shuffling! Finally, let's save the data for later reuse:
+In [52]:
+
+1
+pickel_file = os.path.join(data_root, 'notMNIST.pickle')
+2
+​
+3
+try:
+4
+    f = open(pickle_file, 'wb')
+5
+    save = {
+6
+        'train_dataset': train_dataset,
+7
+        'train_labels': train_labels,
+8
+        'valid_dataset': valid_dataset,
+9
+        'valid_labels': valid_labels,
+10
+        'test_dataset': test_dataset,
+11
+        'test_labels': test_labels,
+12
+    }
+13
+    pickle.dump(save, f, pickle.HIGHEST_PROTOCOL)
+14
+    f.close()
+15
+exception Exception as e:
+16
+    print('Unable to save data to ', pickle_file, ':', e)
+17
+    raise
+  File "<ipython-input-52-1ac4ba901eb9>", line 15
+    exception Exception as e:
+            ^
+SyntaxError: invalid syntax
+
+
+In [70]:
+
+statinfo = os.stat(pickle_file)
+print('Compressed pickle size:', statinfo.st_size)
+Compressed pickle size: 165929033
+Problem 5
+By construction, this dataset might contain a lot of overlapping samples, including training data that's also contained in the validation and test set! Overlap between training and test can skew the results if you expect to use your model in an environment where there is never an overlap, but are actually ok if you expect to see training samples recur when you use it. Measure how much overlap there is between training, validation and test samples. Optional questions: What about near duplicates between datasets? (images that are almost identical) Create a sanitized validation and test set, and compare your accuracy on those in subsequent assignments.
+In [71]:
+
+import time
+​
+def check_overlaps(images1, images2):
+    images1.flags.writeable = False
+    images2.flags.writeable = False
+    start = time.clock()
+    hash1 = set([hash(image1.data) for image1 in images1])
+    hash2 = set([hash(image2.data) for image2 in images2])
+    all_overlaps = set.intersection(hash1, hash2)
+    return all_overlaps, time.clock()-start
+r, execTime = check_overlaps(train_dataset, test_dataset)
+print('Number of overlaps between training and test sets: {}. Execution on time: {}.'.format(len(r), execTime))
+r, execTime = check_overlaps(train_dataset,valid_dataset)
+print('Number of overelaps between training and validation sets: {}. Excution time: {}'.format(len(r), execTime))
+r, execTime = check_overlaps(valid_dataset, test_dataset)
+print('Number of overlaps between validation and test sets:{}. Excution time: {}.'.format(len(r), execTime))
+​
+Number of overlaps between training and test sets: 1120. Execution on time: 2.96938.
+Number of overelaps between training and validation sets: 978. Excution time: 2.894941
+Number of overlaps between validation and test sets:74. Excution time: 0.270628.
+Problem 6
+Let's get an idea of what an off-the-shelf classifier can give you on this data. It's always good to check that there is something to learn, and that it's a problem that is not so trivial that a canned solution solves it. Train a simple model on this data using 50, 100, 1000 and 5000 training samples. Hint: you can use the LogisticRegression model from sklearn.linear_model. Optional question: train an off-the-shelf model on all the data!
+In [72]:
+
+# Here you give 200000 samples
+# 28 * 28 features
+# We have to reshape them because scikit-learn expects(n_samples, n_features)
+train_dataset.shape
+Out[72]:
+(200000, 28, 28)
+In [73]:
+
+test_dataset.shape
+Out[73]:
+(10000, 28, 28)
+In [74]:
+
+# Prepare training data
+samples, width, height = train_dataset.shape
+x_train = np.reshape(train_dataset,(samples,width*height))
+y_train = train_labels
+​
+# Prepare testing data
+samples, width, height = test_dataset.shape
+x_test = np.reshape(test_dataset,(samples,width*height))
+y_test = test_labels
+In [77]:
+
+# Import
+from sklearn.linear_model import LogisticRegression
+​
+#Time
+import time
+start = time.clock()
+# Instantiate
+lg = LogisticRegression(multi_class='multinomial', solver='lbfgs', random_state=42, verbose=1, max_iter=1000, n_jobs=1)
+​
+# Fit
+lg.fit(x_train, y_train)
+​
+# Predict
+y_pred = lg.predict(x_test)
+​
+# Score
+from sklearn import metrics
+print(metrics.accuracy_score(y_test, y_pred))
+print(time.clock()-start)
+​
+[Parallel(n_jobs=1)]: Done   1 out of   1 | elapsed: 27.4min finished
+0.8945
+1623.272872

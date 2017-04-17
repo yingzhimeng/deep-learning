@@ -24,7 +24,7 @@ train_step = tf.train.GradientDescentOptimizer(0.01).minimize(cross_entropy)
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 start=time.clock()
-for i in range(100):
+for i in range(1000):
  batch_xs, batch_ys = mnist.train.next_batch(100)
  sess.run(train_step, feed_dict={x: batch_xs, y_: batch_ys})
  correct_prediction = tf.equal(tf.argmax(y,1), tf.argmax(y_,1))

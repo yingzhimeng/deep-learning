@@ -11,7 +11,7 @@ import matplotlib.cm as cm
 import random as random
 # %matplotlib inline
 
-data = pd.read_csv('/home/jiafangliu/学习/bigdata/practices/training/training.csv')
+data = pd.read_csv('/home/jiafangliu/bigdata/deep-learning/training.csv')
 print('data loaded')
 
 # misc variables and sizes of data
